@@ -35,12 +35,13 @@ class TestData(Dataset):
 
 
 class BinaryClassification(nn.Module):
-    def __init__(self, num_feat: int):
+    def __init__(self, hidden_dims, num_feat: int):
         super(BinaryClassification, self).__init__()
         # Number of input features is 9.
-        self.layer_1 = nn.Linear(num_feat, 64)
-        self.layer_2 = nn.Linear(64, 64)
-        self.layer_3 = nn.Linear(64, 1)
+        self.layer_1 = nn.Linear(num_feat, hidden_dims[0])
+        self.layer_2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_3 = nn.Linear(hidden_dim, 1)
 
         self.relu = nn.ReLU()
 
@@ -104,6 +105,8 @@ def train_model(model, train_loader, val_loader, device, LR, EPOCHS):
     loss_fn = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
+    train_losses = []
+    val_losses = []
     for e in range(1, EPOCHS + 1):
         model.train()
         train_loss, train_acc = train_loop(
@@ -111,10 +114,14 @@ def train_model(model, train_loader, val_loader, device, LR, EPOCHS):
         )
         val_loss, val_acc = test_loop(val_loader, model, loss_fn, device)
 
-        if e % 5 == 0:
-            print(
-                f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
-            )
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+
+        # if e % 5 == 0:
+        print(
+            f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
+        )
+    return train_losses, val_losses
 
 
 def test_model(data_loader, model, device):

@@ -14,11 +14,11 @@ def read_csv(filename: str) -> pd.DataFrame:
     return df
 
 
-def split_train_test(
-    df: pd.DataFrame, test_size: float
-) -> t.Tuple[pd.DataFrame, pd.DataFrame]:
-    train, test = train_test_split(df, test_size=test_size, random_state=42)
-    return train, test
+def split_train_test(data, test_size: float, rng):
+    if isinstance(data, pd.DataFrame):
+        return train_test_split(data, test_size=test_size, random_state=rng)
+    elif isinstance(data, list):
+        return train_test_split(*data, test_size=test_size, random_state=rng)
 
 
 def count_frequency_labels(series: pd.Series) -> pd.DataFrame:
