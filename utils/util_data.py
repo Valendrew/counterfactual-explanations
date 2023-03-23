@@ -49,7 +49,7 @@ def plot_dataframe(data, labels=None, vmin=-9, vmax=0.15, figsize=None, s=4):
     plt.tight_layout()
 
 
-def encode_normalize_df(df, std_scaler=None, label_bin=None):
+def encode_normalize_df(df, std_scaler=None, label_bin=None, neg_label=0, pos_label=1):
     X_raw, y_raw = df.iloc[:, 1:], df.iloc[:, 0]
 
     # standardization with mean 0 and unit variance
@@ -61,7 +61,7 @@ def encode_normalize_df(df, std_scaler=None, label_bin=None):
 
     # encoding of the label
     if label_bin is None:
-        label_bin = LabelBinarizer(neg_label=0, pos_label=1)
+        label_bin = LabelBinarizer(neg_label=neg_label, pos_label=pos_label)
         y = label_bin.fit_transform(y_raw)
     else:
         y = label_bin.transform(y_raw)
@@ -97,3 +97,13 @@ def plot_correlated_features(feat_1, feat_2, n_cols=3, sx=4, sy=5):
     for i in range(1, 1 + (n_rows * n_cols - feat_1.nunique())):
         faxs[-i].set_visible(False)
     fig.show()
+
+
+param_dist = {
+    "objective": "binary:logistic",
+    "eval_metric": "error",
+    "max_depth": 6,
+    "eta": 0.3,
+    "min_child_weight": 1,
+    "gamma": 0,
+}
