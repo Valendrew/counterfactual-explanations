@@ -46,7 +46,7 @@ class BinaryClassification(nn.Module):
         for i in range(self.n_hidden_dims - 1):
             self.hidden_layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
 
-        self.layer_3 = nn.Linear(hidden_dims[-1], 1)
+        self.layer_n = nn.Linear(hidden_dims[-1], 1)
 
         self.relu = nn.ReLU()
 
@@ -56,7 +56,7 @@ class BinaryClassification(nn.Module):
         for i in range(self.n_hidden_dims - 1):
             x = self.relu(self.hidden_layers[i](x))
 
-        x = self.layer_3(x)
+        x = self.layer_n(x)
 
         return x
 

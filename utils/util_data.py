@@ -7,12 +7,18 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer, StandardScaler
 
+import gdown
 
-def read_csv(filename: str) -> pd.DataFrame:
-    df = pd.read_csv(filename)
+
+def read_csv(filename: str, **kwargs) -> pd.DataFrame:
+    df = pd.read_csv(filename, **kwargs)
     assert isinstance(df, pd.DataFrame)
     return df
 
+
+def download_helper(id: str, name: str, quiet: bool=False):
+    gdown.download(id=id, output=name, quiet=quiet)
+        
 
 def split_train_test(data, test_size: float, rng):
     if isinstance(data, pd.DataFrame):
@@ -30,6 +36,7 @@ def count_frequency_labels(series: pd.Series) -> pd.DataFrame:
     return df
 
 
+<<<<<<< HEAD
 def plot_dataframe(data, labels=None, vmin=-9, vmax=0.15, figsize=None, s=4):
     plt.figure(figsize=figsize)
     plt.imshow(data.T.iloc[:, :], aspect="auto", cmap="RdBu", vmin=vmin, vmax=vmax)
@@ -50,6 +57,9 @@ def plot_dataframe(data, labels=None, vmin=-9, vmax=0.15, figsize=None, s=4):
 
 
 def encode_normalize_df(df, std_scaler=None, label_bin=None, neg_label=0, pos_label=1):
+=======
+def encode_normalize_df(df, std_scaler=None, label_bin=None):
+>>>>>>> 409be0da238cc32f2f56698562f57b83b9c799d2
     X_raw, y_raw = df.iloc[:, 1:], df.iloc[:, 0]
 
     # standardization with mean 0 and unit variance
@@ -67,6 +77,7 @@ def encode_normalize_df(df, std_scaler=None, label_bin=None, neg_label=0, pos_la
         y = label_bin.transform(y_raw)
 
     return X, y, std_scaler, label_bin
+<<<<<<< HEAD
 
 
 def plot_correlated_features(feat_1, feat_2, n_cols=3, sx=4, sy=5):
@@ -107,3 +118,5 @@ param_dist = {
     "min_child_weight": 1,
     "gamma": 0,
 }
+=======
+>>>>>>> 409be0da238cc32f2f56698562f57b83b9c799d2
