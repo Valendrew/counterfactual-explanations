@@ -1,4 +1,5 @@
 import math
+import os
 import typing as t
 
 import matplotlib.pyplot as plt
@@ -10,12 +11,40 @@ from sklearn.preprocessing import LabelBinarizer, StandardScaler
 import gdown
 
 
+class DownloadHelper:
+    def __init__(self, id: str, name: str, mode: str, quiet: bool = False):
+        self.id = id
+        self.name = name
+        self.file_path = os.path.join(os.getcwd(), "data/raw", self.name)
+        self.mode = mode
+        self.quiet = quiet
+
+    def download(self):
+        # chek if file already exists
+        if os.path.exists(self.file_path):
+            print(f"File {self.name} already exists. Skip download.")
+            return
+        
+        # download with gdown
+        if self.mode == "gdown":
+            gdown.download(id=self.id, output=self.file_path, quiet=self.quiet)
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+    
+    def read_csv(self, **kwargs) -> pd.DataFrame:
+        df = pd.read_csv(self.file_path, **kwargs)
+        assert isinstance(df, pd.DataFrame)
+        return df
+
+
+# TOOD remove this function
 def read_csv(filename: str, **kwargs) -> pd.DataFrame:
     df = pd.read_csv(filename, **kwargs)
     assert isinstance(df, pd.DataFrame)
     return df
 
 
+# TODO remove this function
 def download_helper(id: str, name: str, quiet: bool = False):
     gdown.download(id=id, output=name, quiet=quiet)
 
