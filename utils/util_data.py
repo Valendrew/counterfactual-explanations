@@ -36,8 +36,8 @@ def count_frequency_labels(series: pd.Series) -> pd.DataFrame:
     return df
 
 
-def encode_normalize_df(df, std_scaler=None, label_bin=None, neg_label=0, pos_label=1):
-    X_raw, y_raw = df.iloc[:, 1:], df.iloc[:, 0]
+def encode_normalize_df(df, target:str, std_scaler=None, label_bin=None, neg_label=0, pos_label=1):
+    X_raw, y_raw = df.iloc[:, df.columns != target], df[target]
 
     # standardization with mean 0 and unit variance
     if std_scaler is None:
