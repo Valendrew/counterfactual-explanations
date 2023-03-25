@@ -1,35 +1,64 @@
-import math
 import os
-import typing as t
+import shutil
 
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer, StandardScaler
 
 import gdown
+import kaggle
 
 
 class DownloadHelper:
-    def __init__(self, id: str, name: str, mode: str, quiet: bool = False):
-        self.id = id
+    def __init__(self, url: str, name: str, mode: str, quiet: bool = False):
+        self.url = url
         self.name = name
-        self.file_path = os.path.join(os.getcwd(), "data/raw", self.name)
+        
+        # path variables
+        self.root_path = os.path.join(os.getcwd(), "data", "raw")
+        self.file_path = os.path.join(self.root_path, self.name)
+
+        # download mode
         self.mode = mode
         self.quiet = quiet
 
     def download(self):
-        # chek if file already exists
+        # check if file already exists
         if os.path.exists(self.file_path):
             print(f"File {self.name} already exists. Skip download.")
             return
         
         # download with gdown
         if self.mode == "gdown":
-            gdown.download(id=self.id, output=self.file_path, quiet=self.quiet)
+            gdown.download(id=self.url, output=self.file_path, quiet=self.quiet)
+        # download with kaggle
+        elif self.mode == "kaggle":
+            self.__download_kaggle()
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
+        
+    def __download_kaggle(self):
+        # "name" file already exists
+        if os.path.exists(self.file_path):
+            print(f"File {self.name} already exists. Skip download.")
+            return
+        
+        zip_path = os.path.join(self.root_path, f"{self.url.split('/', 1)[1]}.zip")
+        # "zip_path" file already exists
+        if os.path.exists(zip_path):
+            print(f"File {zip_path} already exists.")
+        else:
+            print("Download file from kaggle.")
+            os.system(f"kaggle datasets download -d {self.url} -p {self.root_path}")
+
+        print("Unzip file and move it to the correct location.")
+        try:
+            shutil.unpack_archive(zip_path, extract_dir=self.root_path)
+            # remove zip file
+            os.remove(zip_path)
+        except ValueError as e:
+            print(f"File {zip_path} invalid")
+
     
     def read_csv(self, **kwargs) -> pd.DataFrame:
         df = pd.read_csv(self.file_path, **kwargs)

@@ -1,5 +1,8 @@
+import math
+
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 
 def plot_model_results(axs, epochs, results, title):
@@ -57,3 +60,28 @@ def plot_dataframe(data, labels=None, vmin=-9, vmax=0.15, figsize=None, s=4):
             color=plt.get_cmap("tab10")(np.mod(labels, 10)),
         )
     plt.tight_layout()
+
+
+def plot_df_histograms(df):
+    assert isinstance(df, pd.DataFrame)
+
+    n_cols = 3
+    n_rows = math.ceil(df.shape[1] / n_cols)
+    x_size, y_size = 3, 3
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(x_size * n_cols, y_size * n_rows))
+    axes = axes.ravel()
+
+    for i, col in enumerate(df.columns):
+        # bins = np.linspace(df[col].min(), df[col].max(), 20)
+        bins = 4
+        df[col].plot(kind="hist", bins=bins, ax=axes[i], title=col, edgecolor='black')
+        axes[i].set_xlabel(col)
+        axes[i].set_ylabel("Frequency")
+        # xticks = np.arange(df[col].min(), df[col].max()+1, 1) # adjust xticks
+        axes[i].set_xticks(xticks)
+
+    fig.tight_layout()
+    fig.show()
+
+
