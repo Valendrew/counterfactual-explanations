@@ -6,7 +6,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer, StandardScaler
 
 import gdown
-import kaggle
+# import kaggle only if doesn't have errors
+try:
+    import kaggle
+except ImportError:
+    print("kaggle error. Some functions will not work.")
 
 
 class DownloadHelper:
