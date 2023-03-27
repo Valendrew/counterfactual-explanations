@@ -9,8 +9,8 @@ import gdown
 # import kaggle only if doesn't have errors
 try:
     import kaggle
-except ImportError:
-    print("kaggle error. Some functions will not work.")
+except OSError:
+    print("kaggle.json not found, you cannot use kaggle module.")
 
 
 class DownloadHelper:
@@ -117,3 +117,4 @@ def encode_normalize_df(
         y = label_bin.transform(y_raw)
 
     return X, y, std_scaler, label_bin
+
