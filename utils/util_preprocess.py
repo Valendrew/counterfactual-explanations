@@ -53,9 +53,9 @@ binary_features = {
         "pat": r"\bno\b",
     },
     "sound_loudspeaker": {
-        "repl": [0, 1],
+        "repl": [1, 0],
         "new_col": "has_stereo_speakers",
-        "pat": r"\byes\b",
+        "pat": r"stereo|dual|multiple|quad",
     },
     "sound_3.5mm_jack": {
         "repl": [1, 0],
