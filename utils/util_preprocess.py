@@ -6,10 +6,6 @@ import typing
 import numpy as np
 import pandas as pd
 
-import logging
-
-logging.basicConfig(level=logging.info, format="%(message)s")
-
 
 class DataFramePreprocess:
     def __init__(self, df: pd.DataFrame, config_name: str):
@@ -27,20 +23,20 @@ class DataFramePreprocess:
             setattr(self, k, v)
 
     def filter_unwanted_columns(self):
-        logging.info("Removing unwanted columns and duplicates...")
+        print("Removing unwanted columns and duplicates...")
         # log the number of rows before removing unwanted columns
-        logging.info(
+        print(
             f"Shape before removing unwanted columns and duplicates: {self.df.shape}"
         )
         self.df = self.df[self.keep_cols].drop_duplicates().reset_index(drop=True)
-        logging.info(
+        print(
             f"Shape after removing unwanted columns and duplicates: {self.df.shape}\n"
         )
 
     def filter_unwanted_rows(self, filter_condition: typing.Dict):
-        logging.info("Removing unwanted rows and duplicates...")
+        print("Removing unwanted rows and duplicates...")
         # log the number of rows before removing unwanted rows
-        logging.info(
+        print(
             f"Shape before removing unwanted rows and duplicates: {self.df.shape}"
         )
 
@@ -50,7 +46,7 @@ class DataFramePreprocess:
 
         self.df = self.df[idx].drop_duplicates().reset_index(drop=True)
 
-        logging.info(
+        print(
             f"Shape after removing unwanted rows and duplicates: {self.df.shape}\n"
         )
         return self.df
@@ -92,7 +88,7 @@ class DataFramePreprocess:
         # convert to float
         series = series.astype(float)
 
-        logging.debug(f"Number of rows without value: {series.isna().sum()}")
+        print(f"Number of rows without value: {series.isna().sum()}")
         return series
 
     def process_float_feature(self, series: pd.Series, reg: str) -> pd.Series:
@@ -105,7 +101,7 @@ class DataFramePreprocess:
         # convert to float
         series = series.astype(float)
 
-        logging.debug(f"Number of rows without a value: {series.isna().sum()}")
+        print(f"Number of rows without a value: {series.isna().sum()}")
         return series
 
     def process_binary_feature(
@@ -138,7 +134,7 @@ class DataFramePreprocess:
         # convert the height and width to float
         extract_col = extract_col.astype(float)
 
-        logging.debug(f"Number of rows without a value: {series.isna().sum()}")
+        print(f"Number of rows without a value: {series.isna().sum()}")
         return extract_col
 
     def process_multi_feature(
@@ -153,7 +149,7 @@ class DataFramePreprocess:
         # set to nan the rows that are not extracted
         series.loc[~extracted_idx] = np.nan
 
-        logging.debug(f"Number of rows without value: {series.isna().sum()}")
+        print(f"Number of rows without value: {series.isna().sum()}")
         return series
 
     def process_camera_features(self, df: pd.DataFrame, col: str):
@@ -182,7 +178,7 @@ class DataFramePreprocess:
         # set to nan the rows that are not extracted
         df_new.loc[~extracted_idx, camera_res] = np.nan
 
-        logging.debug(f"Number of rows without value: {df_new.isna().sum()}")
+        print(f"Number of rows without value: {df_new.isna().sum()}")
         return df_new
 
     def extract_replace(self, pattern: str, series_raw: pd.Series):
@@ -193,7 +189,7 @@ class DataFramePreprocess:
         # replace the extracted pattern with the extracted value
         series.loc[extract_idx] = extract_col
 
-        logging.debug(f"Extracted {extract_idx} rows")
+        print(f"Number of rows extracted: {extract_idx.sum()}")
         return series, extract_idx
 
 
@@ -224,8 +220,8 @@ class GSMArenaPreprocess(DataFramePreprocess):
 
 
     def preprocess_feature(self, col_name: str) -> pd.DataFrame:
-        logging.debug(f"Preprocessing {col_name}...")
-        logging.info(
+        print(f"Preprocessing {col_name}...")
+        print(
             f"Number of rows before extracting valid {col_name}: {self.df.shape[0]}"
         )
 
@@ -241,7 +237,7 @@ class GSMArenaPreprocess(DataFramePreprocess):
             )
 
         self.df = self.df.dropna(subset=feat_cols, how="all").reset_index(drop=True)
-        logging.debug(
+        print(
             f"Number of rows after removing null values in {col_name}: {self.df.shape[0]}"
         )
 
@@ -293,11 +289,11 @@ class GSMArenaPreprocess(DataFramePreprocess):
             col_name = df_feat.columns.to_list()
             feat_cols = col_name
         else:
-            logging.warning(f"Column {col_name} not processed!")
+            print(f"Column {col_name} not processed!")
             raise NotImplementedError
 
         # remove the rows that are nan after preprocessing
         self.df = self.df.dropna(subset=feat_cols, how="all").reset_index(drop=True)
-        logging.info(
+        print(
             f"Number of rows after extracting valid {col_name}: {self.df.shape[0]}\n"
         )

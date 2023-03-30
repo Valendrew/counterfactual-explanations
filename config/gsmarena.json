@@ -65,11 +65,11 @@
         },
         "comms_wlan": {
             "repl": [
-                0,
-                1
+                1,
+                0
             ],
             "new_col": "has_wlan_5ghz",
-            "pat": "[^/]b/g/n[^/]"
+            "pat": "(?:a\\/[b\\/gn]+)|(?:[b\\/gn]+\\/ac)"
         },
         "comms_nfc": {
             "repl": [
@@ -142,6 +142,9 @@
         }
     },
     "fill_cols": {
+        "sound_3.5mm_jack": "no",
+        "memory_card_slot": "no",
+        "comms_wlan": "no",
         "comms_nfc": "no",
         "battery_charging": "no",
         "body": "no"
