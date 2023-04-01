@@ -3,8 +3,10 @@ from sklearn.model_selection import StratifiedKFold
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import lightgbm as lgb
 
 from typing import Callable
+import warnings
 
 class TrainData(Dataset):
     def __init__(self, X_data, y_data):
@@ -93,7 +95,8 @@ class LightGBM:
             warnings.filterwarnings("ignore", category=UserWarning)
             if self.api == "sklearn":
                 self.model.fit(self.X_train, self.y_train,
-                               eval_set=[(X_train, y_train), (X_val, y_val)], verbose=verbose)
+                               eval_set=[(self.X_train, self.y_train), (self.X_val, self.y_val)],
+                               verbose=verbose)
                 training_evaluation = self.model.evals_result_
             else: 
                 training_evaluation = {}
