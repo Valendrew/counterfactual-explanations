@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
+from typing import Callable
 
 class TrainData(Dataset):
     def __init__(self, X_data, y_data):
@@ -66,6 +67,83 @@ class BinaryClassification(nn.Module):
                 layer.reset_parameters()
 
 
+class LightGBM:
+    '''
+        This class allows to build a lightgbm model using the sklearn api or the
+        native lightgbm api.
+    '''
+    def __init__(self, api: str, parameters: dict, train_data: lgb.Dataset, 
+                 val_data: lgb.Dataset=None):
+        self.api = api
+        self.parameters = parameters
+        self.fitted = False
+
+        if api == "sklearn":
+            self.model = lgb.LGBMClassifier(**parameters)
+            self.X_train, self.y_train = train_data.data, train_data.label
+            self.X_val, self.y_val = val_data.data, val_data.label
+        else:
+            self.model = lgb.Booster(parameters, train_data)  
+            self.train_data = train_data
+            self.val_data = val_data
+
+
+    def train_model(self, verbose: int=-100):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            if self.api == "sklearn":
+                self.model.fit(self.X_train, self.y_train,
+                               eval_set=[(X_train, y_train), (X_val, y_val)], verbose=verbose)
+                training_evaluation = self.model.evals_result_
+            else: 
+                training_evaluation = {}
+                
+                self.model = lgb.train({**self.parameters, "verbose": verbose}, self.train_data,
+                                       valid_sets=[self.train_data, self.val_data],
+                                       verbose_eval=False, evals_result=training_evaluation)
+                
+            self.fitted = True
+            self.train_eval = training_evaluation
+    
+
+    def predict(self, data):
+        assert self.fitted, "You need to train the model beforehand."
+        if self.api == "sklearn":
+            predictions = self.model.predict(data)
+        else:
+            # Take the maximum probability position
+            predictions = np.argmax(self.model.predict(data), axis=1)
+
+        return predictions
+
+
+    def compute_score(self, score_fn: Callable, data, y_true: list):
+        y_pred = self.predict(data)
+        score = score_fn(y_true, y_pred)
+
+        return score
+
+    
+    def plot_metrics(self, metric: str="all", **kwargs):
+        assert self.fitted, "You need to train the model with an evaluation set beforehand."
+
+        metrics = self.parameters['metric']
+        if metric == "all":
+            for met in metrics:
+                lgb.plot_metric(self.train_eval, metric=met,
+                                title=f"{met} during training", **kwargs);
+
+    
+    def plot_info(self, kind, **kwargs):
+        assert self.fitted, "You need to train the model beforehand."
+        if kind == "importance":
+            lgb.plot_importance(self.model, **kwargs)
+        elif kind == "tree":
+            lgb.plot_tree(self.model, **kwargs)
+        else:
+            print("ERROR: the selected kind of chart is not available.")
+            
+            
 def binary_acc(y_pred, y_test):
     y_pred_tag = torch.round(torch.sigmoid(y_pred))
     acc = (y_pred_tag == y_test).type(torch.float).sum().item()
