@@ -78,6 +78,19 @@ class LightGBM:
     '''
     def __init__(self, api: str, parameters: dict, train_data: lgb.Dataset, 
                  val_data: lgb.Dataset=None):
+        '''
+            Parameters:
+                - api: str
+                    It is a parameter that indicates if you want to create an instance
+                    of LightGBM using the sklearn api or the native one. It takes
+                    a value between 'sklearn' and 'lgb'.
+                - parameters: dict  
+                    It's the dictionary of parameters to pass to the LighGBM model.
+                - train_data: lgb.Dataset
+                    The training data to use for the model.
+                - val_data: lgb.Dataset
+                    The validation dataset to use for the training.
+        '''
         self.api = api
         self.parameters = parameters
         self.fitted = False
@@ -93,6 +106,14 @@ class LightGBM:
 
 
     def train_model(self, verbose: int=-100):
+        '''
+            It trains the model.
+            
+            Parameters:
+                - verbose: int
+                    It's the value to make the output of the training verbose or not,
+                    by default it disables the output.
+        '''
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
             if self.api == "sklearn":
@@ -112,6 +133,19 @@ class LightGBM:
     
 
     def predict(self, data):
+        '''
+            It predicts the class given some data.
+            
+            Parameters:
+                - data: pd.DataFrame
+                    A dataframe in which there are the samples you want
+                    to predict the class.
+            
+            Returns:
+                - np.ndarray
+                    It returns a numpy array with the predicted class for 
+                    each sample.
+        '''
         assert self.fitted, "You need to train the model beforehand."
         if self.api == "sklearn":
             predictions = self.model.predict(data)
@@ -123,6 +157,21 @@ class LightGBM:
 
 
     def compute_score(self, score_fn: Callable, data, y_true: list):
+        '''
+            It compute a score between the predicted and the original label.
+            
+            Parameters:
+                - score_fn: Callable
+                    A score function that will be used to compute a score.
+                - data: pd.DataFrame
+                    The dataframe that contains the data we want to test.
+                - y_true: list
+                    The array with the true labels for the data.
+                    
+            Returns:
+                - float
+                    The score computed by the passed function
+        '''
         y_pred = self.predict(data)
         score = score_fn(y_true, y_pred)
 
@@ -130,6 +179,17 @@ class LightGBM:
 
     
     def plot_metrics(self, metric: str="all", **kwargs):
+        '''
+            It plots the metrics computed during the training.
+            
+            Parameters:
+                - metric: str
+                    A string between 'all' and the name of a metric used during
+                    the training. If 'all' selected then the plot for all the 
+                    metrics will be printed.
+                - **kwargs
+                    The parameters to pass to the lgb.plot_metric function.
+        '''
         assert self.fitted, "You need to train the model with an evaluation set beforehand."
 
         metrics = self.parameters['metric']
@@ -137,9 +197,24 @@ class LightGBM:
             for met in metrics:
                 lgb.plot_metric(self.train_eval, metric=met,
                                 title=f"{met} during training", **kwargs);
+        else:
+            assert metric in metrics, "The specified metric was not used during training."
+            lgb.plot_metric(self.train_eval, metric=metric, 
+                            title=f"{metric} during training", **kwargs)
 
     
     def plot_info(self, kind, **kwargs):
+        '''
+            It plots the chart of the tree diagram or the importance 
+            histogram.
+            
+            Parameters:
+                - kind: str
+                    The type of chart to draw, one between 'importance' and 'tree'.
+                - **kwargs  
+                    The additional parameters to pass to the lgb.plot_{importance|tree}
+                    function.
+        '''
         assert self.fitted, "You need to train the model beforehand."
         if kind == "importance":
             lgb.plot_importance(self.model, **kwargs)
@@ -176,6 +251,7 @@ class DiceCounterfactual:
         self.backend = backend
         self.explanation = None
         self.CFs = None
+
 
     def create_explanation_instance(self, method: str="genetic"):
         '''
