@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import lightgbm as lgb
+import pandas as pd
+import dice_ml
 
 from typing import Callable
 import warnings
@@ -147,6 +149,181 @@ class LightGBM:
             print("ERROR: the selected kind of chart is not available.")
             
             
+class DiceCounterfactual:
+    '''
+        It's a class that allows you to create Dice counterfactuals, taking as input
+        a model, the dataframe with the data, the continuous feature and the target.
+    '''
+    def __init__(self, model, backend: str, data: pd.DataFrame, cont_feat: list[str], target: str):
+        '''
+            Parameters:
+                - model: 
+                    It's the model to use for counterfactuals.
+                - backend: str
+                    A string between 'sklearn', 'TF1', 'TF2' and 'PYT'.
+                - data: pd.DataFrame
+                    The data used from Dice for statistics.
+                - cont_feat: list[str]
+                    The list of names of continuous features.
+                - target: str
+                    The name of the target feature.
+        '''
+        self.model = dice_ml.Model(model=model, backend=backend)
+        self.data = dice_ml.Data(dataframe=data, continuous_features=cont_feat,
+                                 outcome_name=target)
+        self.cont_feat = cont_feat
+        self.target = target
+        self.backend = backend
+        self.explanation = None
+        self.CFs = None
+
+    def create_explanation_instance(self, method: str="genetic"):
+        '''
+            It generates the Dice explanation instance using the model and the
+            data passed during the initialization.
+
+            Parameters:
+                - method: str
+                    The method that will be used during the counterfactual generation.
+                    A string between 'random', 'kdtree', 'genetic'. 
+        '''
+        self.explanation = dice_ml.Dice(self.data, self.model, method=method)
+
+
+    def generate_counterfactuals(self, sample: pd.DataFrame, new_class: int, target: str,
+                                 n_cf: int=1, **kwargs):
+        '''
+            It generates the counterfactuals using an explanation instance.
+
+            Parameters:
+                - sample: pd.DataFrame
+                    The dataframe that contains the samples for which the model
+                    will generate the counterfactuals.
+                - new_class: int
+                    The new label the counterfactuals will be predicted with.
+                - target: str
+                    The name of the target feature, that will be removed from the 
+                    sample before generating the counterfactuals.
+                - n_cf: int
+                    The number of counterfactuals to generate for each sample.
+                - **kwargs:
+                    Additional parameters to pass to the Dice method for generating
+                    counterfactuals.
+
+            Returns:
+                - list[pd.DataFrame]
+                    It returns a list with a DataFrame that contains the counterfactual
+                    values for each sample, if n_cf > 1 the dataframe will contain
+                    n_cf rows.
+        '''
+        assert isinstance(sample, pd.DataFrame), "The samples need to be in a dataframe."
+        if self.explanation is None:
+            print("WARNING: you didn't create an explanation instance, therefore a default one will be created in order to proceed.\n")
+            self.create_explanation_instance()
+        
+        # Save the passed samples
+        self.start_samples = sample
+        raw_CFs = self.explanation.generate_counterfactuals(sample.drop(target, axis=1),
+                                                            total_CFs=n_cf, desired_class=new_class,
+                                                            **kwargs)
+        self.CFs = [cf.final_cfs_df.astype(float) for cf in raw_CFs.cf_examples_list]
+
+        return self.CFs
+
+    
+    def __apply_inverse_std(self, row, std_scaler):
+        for feat in row.index:
+            # Apply the inverse standardization only on continuous features
+            if feat in std_scaler:
+                row[feat] = std_scaler[feat].inverse_transform(
+                    np.reshape(row[feat], (1, 1))
+                ).item()
+        return row
+
+
+    def destandardize_cfs_orig(self, scaler_num: dict):
+        '''
+            It works on the last generated counterfactuals and the relative
+            starting samples, inverting the transform process applied to standardize
+            the data.
+
+            Parameters:
+                - scaler_num: dict
+                    The dictionary that contains the standard scalers for the 
+                    continuous features.
+            
+            Returns:
+                - list
+                    It returns a list of pairs sample - counterfactuals with 
+                    unstandardized values, in practice are both pd.DataFrame.
+        '''
+        assert self.CFs is not None, "The CFs have not been created yet."
+
+        # Destandardize the samples for which we create the cfs
+        self.start_samples = self.start_samples.apply(self.__apply_inverse_std, 
+                                                      std_scaler=scaler_num, axis=1)
+        
+        # Apply to the different dataframes of the counterfactuals
+        self.CFs = [cf.apply(self.__apply_inverse_std, std_scaler=scaler_num, 
+                             axis=1) for cf in self.CFs]
+
+        pairs = []
+        for i in range(self.start_samples.shape[0]):
+            pairs.append((self.start_samples.iloc[[i]], self.CFs[i]))
+
+        return pairs
+
+
+    def __color_df_diff(self, row, color):
+        # left_cell = f"border: 1px solid {color}; border-right: 0px"
+        # right_cell = f"border: 1px solid {color}; border-left: 0px"
+        # return [left_cell, right_cell] if x[0] - x[1] != 0 else ["", ""]
+        cell_border = f"border: 1px solid {color}"
+        res = []
+        for i in range(1, len(row)):
+            if row[0] - row[i] != 0:
+                res.append(cell_border)
+            else:
+                res.append("")
+        if any(res):
+            res.insert(0, cell_border)
+        else:
+            res.append("")
+        return res
+
+
+    def compare_sample_cf(self, pairs, highlight_diff=True, color="red"):
+        '''
+            It returns a dataframe that has the features as index, a column for 
+            the original sample and a column for each generated counterfactual.
+
+            Parameters:
+                - pairs: list
+                    The list of pairs returned by the 'destandardize_cfs_orig'
+                    function.
+                - highlight_diff: bool
+                    If True, the border of the changed features will be colored.
+                - color: str
+                    The color to use for highlight the differences beteween columns. 
+
+            Returns:
+                - list
+                    A list of dataframe which have in each column the values of 
+                    the original sample and the counterfactuals. 
+        '''        
+        comp_dfs = []
+        for i in range(len(pairs)):
+            sample, cfs = pairs[i][0].transpose().round(3), pairs[i][1].transpose().round(3)
+            # Rename the dataframes correctly
+            sample.columns = ["Original sample"]
+            cfs.columns = [f"Counterfactual_{k}" for k in range(cfs.shape[1])]
+
+            comp_df = pd.concat([sample, cfs], axis=1)
+            comp_df = comp_df.style.apply(self.__color_df_diff, color=color, axis=1).format(precision=3)
+            comp_dfs.append(comp_df)
+        return comp_dfs
+
+
 def binary_acc(y_pred, y_test):
     y_pred_tag = torch.round(torch.sigmoid(y_pred))
     acc = (y_pred_tag == y_test).type(torch.float).sum().item()
