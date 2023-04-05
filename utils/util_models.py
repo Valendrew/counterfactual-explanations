@@ -15,7 +15,7 @@ class TrainData(Dataset):
         if isinstance(X_data, np.ndarray):
             X_data = torch.as_tensor(X_data, dtype=torch.float32)
         if isinstance(y_data, np.ndarray):
-            y_data = torch.as_tensor(y_data, dtype=torch.float32)
+            y_data = torch.as_tensor(y_data, dtype=torch.long)
 
         self.X_data = X_data
         self.y_data = y_data
@@ -40,9 +40,9 @@ class TestData(Dataset):
         return len(self.X_data)
 
 
-class BinaryClassification(nn.Module):
-    def __init__(self, hidden_dims, num_feat: int):
-        super(BinaryClassification, self).__init__()
+class NNClassification(nn.Module):
+    def __init__(self, hidden_dims, num_feat: int, num_class: int):
+        super(NNClassification, self).__init__()
         self.n_hidden_dims = len(hidden_dims)
 
         self.layer_1 = nn.Linear(num_feat, hidden_dims[0])
@@ -51,7 +51,7 @@ class BinaryClassification(nn.Module):
         for i in range(self.n_hidden_dims - 1):
             self.hidden_layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
 
-        self.layer_n = nn.Linear(hidden_dims[-1], 1)
+        self.layer_n = nn.Linear(hidden_dims[-1], num_class)
 
         self.relu = nn.ReLU()
 
@@ -73,36 +73,26 @@ class BinaryClassification(nn.Module):
 
 class LightGBM:
     '''
-        This class allows to build a lightgbm model using the sklearn api or the
-        native lightgbm api.
+        This class allows to build a lightgbm model using the sklearn api.
     '''
-    def __init__(self, api: str, parameters: dict, train_data: lgb.Dataset, 
-                 val_data: lgb.Dataset=None):
+    def __init__(self, parameters: dict, train_data: tuple, val_data: tuple):
         '''
             Parameters:
-                - api: str
-                    It is a parameter that indicates if you want to create an instance
-                    of LightGBM using the sklearn api or the native one. It takes
-                    a value between 'sklearn' and 'lgb'.
                 - parameters: dict  
                     It's the dictionary of parameters to pass to the LighGBM model.
-                - train_data: lgb.Dataset
-                    The training data to use for the model.
-                - val_data: lgb.Dataset
-                    The validation dataset to use for the training.
+                - train_data: tuple
+                    The training data to use for the model, a tuple with X_train
+                    in the first position and y_train in the second one.
+                - val_data: tuple
+                    The validation dataset to use for the training, a tuple with
+                    X_val in the first position and y_val in the second one.
         '''
-        self.api = api
         self.parameters = parameters
         self.fitted = False
 
-        if api == "sklearn":
-            self.model = lgb.LGBMClassifier(**parameters)
-            self.X_train, self.y_train = train_data.data, train_data.label
-            self.X_val, self.y_val = val_data.data, val_data.label
-        else:
-            self.model = lgb.Booster(parameters, train_data)  
-            self.train_data = train_data
-            self.val_data = val_data
+        self.model = lgb.LGBMClassifier(**parameters)
+        self.X_train, self.y_train = train_data
+        self.X_val, self.y_val = val_data
 
 
     def train_model(self, verbose: int=-100):
@@ -116,20 +106,12 @@ class LightGBM:
         '''
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            if self.api == "sklearn":
-                self.model.fit(self.X_train, self.y_train,
-                               eval_set=[(self.X_train, self.y_train), (self.X_val, self.y_val)],
-                               verbose=verbose)
-                training_evaluation = self.model.evals_result_
-            else: 
-                training_evaluation = {}
-                
-                self.model = lgb.train({**self.parameters, "verbose": verbose}, self.train_data,
-                                       valid_sets=[self.train_data, self.val_data],
-                                       verbose_eval=False, evals_result=training_evaluation)
-                
+            self.model.fit(self.X_train, self.y_train,
+                            eval_set=[(self.X_train, self.y_train), (self.X_val, self.y_val)],
+                            verbose=verbose)
+            
             self.fitted = True
-            self.train_eval = training_evaluation
+            self.train_eval = self.model.evals_result_
     
 
     def predict(self, data):
@@ -147,11 +129,7 @@ class LightGBM:
                     each sample.
         '''
         assert self.fitted, "You need to train the model beforehand."
-        if self.api == "sklearn":
-            predictions = self.model.predict(data)
-        else:
-            # Take the maximum probability position
-            predictions = np.argmax(self.model.predict(data), axis=1)
+        predictions = self.model.predict(data)
 
         return predictions
 
@@ -298,7 +276,7 @@ class DiceCounterfactual:
             self.create_explanation_instance()
         
         # Save the passed samples
-        self.start_samples = sample
+        self.start_samples = sample.copy()
         raw_CFs = self.explanation.generate_counterfactuals(sample.drop(target, axis=1),
                                                             total_CFs=n_cf, desired_class=new_class,
                                                             **kwargs)
@@ -307,26 +285,15 @@ class DiceCounterfactual:
         return self.CFs
 
     
-    def __apply_inverse_std(self, row, std_scaler):
-        for feat in row.index:
-            # Apply the inverse standardization only on continuous features
-            if feat in std_scaler:
-                row[feat] = std_scaler[feat].inverse_transform(
-                    np.reshape(row[feat], (1, 1))
-                ).item()
-        return row
-
-
-    def destandardize_cfs_orig(self, scaler_num: dict):
+    def destandardize_cfs_orig(self, scaler_num):
         '''
             It works on the last generated counterfactuals and the relative
             starting samples, inverting the transform process applied to standardize
             the data.
 
             Parameters:
-                - scaler_num: dict
-                    The dictionary that contains the standard scalers for the 
-                    continuous features.
+                - scaler_num:
+                    The standard scaler that normalized the continuous features.
             
             Returns:
                 - list
@@ -335,14 +302,15 @@ class DiceCounterfactual:
         '''
         assert self.CFs is not None, "The CFs have not been created yet."
 
+        std_feat = scaler_num.feature_names_in_
+        inv_standardize = lambda df: scaler_num.inverse_transform(df)
         # Destandardize the samples for which we create the cfs
-        self.start_samples = self.start_samples.apply(self.__apply_inverse_std, 
-                                                      std_scaler=scaler_num, axis=1)
+        self.start_samples[std_feat] = inv_standardize(self.start_samples[std_feat])
         
         # Apply to the different dataframes of the counterfactuals
-        self.CFs = [cf.apply(self.__apply_inverse_std, std_scaler=scaler_num, 
-                             axis=1) for cf in self.CFs]
-
+        for cf in self.CFs:
+            cf[std_feat] = inv_standardize(cf[std_feat])
+        
         pairs = []
         for i in range(self.start_samples.shape[0]):
             pairs.append((self.start_samples.iloc[[i]], self.CFs[i]))
@@ -400,9 +368,13 @@ class DiceCounterfactual:
         return comp_dfs
 
 
-def binary_acc(y_pred, y_test):
-    y_pred_tag = torch.round(torch.sigmoid(y_pred))
-    acc = (y_pred_tag == y_test).type(torch.float).sum().item()
+def multi_acc(y_pred, y_test):
+    y_pred_softmax = torch.log_softmax(y_pred, dim=1)
+    _, y_pred_tags = torch.max(y_pred_softmax, dim=1)    
+    
+    correct_pred = (y_pred_tags == y_test).float()
+    acc = correct_pred.sum().item()
+
     return acc
 
 
@@ -425,7 +397,7 @@ def train_loop(data_loader, model, loss_fn, optimizer, device):
         optimizer.step()
 
         epoch_loss += loss.item()
-        epoch_acc += binary_acc(y_pred, y_batch)
+        epoch_acc += multi_acc(y_pred, y_batch)
         # epoch_acc += (y_pred.argmax(1) == y_batch).type(torch.float).sum().item()
 
     return epoch_loss / len(data_loader), epoch_acc * 100 / len(data_loader.dataset)
@@ -444,15 +416,15 @@ def test_loop(data_loader, model, loss_fn, device):
             # loss
             epoch_loss += loss_fn(y_pred, y_batch).item()
             # accuracy
-            epoch_acc += binary_acc(y_pred, y_batch)
+            epoch_acc += multi_acc(y_pred, y_batch)
 
     return epoch_loss / len(data_loader), epoch_acc * 100 / len(data_loader.dataset)
 
 
-def train_model(train_loader, val_loader, model, device, LR, EPOCHS):
+def train_model(train_loader, val_loader, model, device, LR, EPOCHS, print_every=2):
     model.reset_weights()
 
-    loss_fn = torch.nn.BCEWithLogitsLoss()
+    loss_fn = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     train_losses, val_losses = [], []
@@ -468,7 +440,7 @@ def train_model(train_loader, val_loader, model, device, LR, EPOCHS):
         train_accuracies.append(train_acc)
         val_accuracies.append(val_acc)
 
-        if e % 2 == 0:
+        if e % print_every == 0:
             print(
                 f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
             )
@@ -486,16 +458,16 @@ def test_model(data_loader, model, device):
             X_batch = X_batch.to(device)
             # inference
             y_pred = model(X_batch)
-            y_prob = torch.sigmoid(y_pred)
-            y_tag = torch.round(y_prob)
+            y_prob = torch.log_softmax(y_pred, dim=1)
+            _, y_pred_tags = torch.max(y_prob, dim=1)  
 
-            y_pred_list.append(y_tag.cpu().numpy())
+            y_pred_list.append(y_pred_tags.cpu().numpy())
 
-    y_pred_list = [y for ys in y_pred_list for y in ys]
+    y_pred_list = [y.item() for ys in y_pred_list for y in ys]
     return y_pred_list
 
 
-def kfold_train_model(X, y, n_splits, seed, batch_size, model, device, lr, epochs):
+def kfold_train_model(X, y, n_splits, seed, batch_size, model, device, lr, epochs, print_every):
     skfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     n_losses, n_accuracies = [], []
 
@@ -506,7 +478,7 @@ def kfold_train_model(X, y, n_splits, seed, batch_size, model, device, lr, epoch
         val_loader = DataLoader(val_data, batch_size=batch_size)
 
         losses, accuracies = train_model(
-            train_loader, val_loader, model, device, lr, epochs
+            train_loader, val_loader, model, device, lr, epochs, print_every
         )
         n_losses.append(losses)
         n_accuracies.append(accuracies)
