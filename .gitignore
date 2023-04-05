@@ -3,3 +3,6 @@ __pycache__/
 
 ### Kaggle ###
 kaggle.json
+
+### Avoid old files ###
+*.old.*
