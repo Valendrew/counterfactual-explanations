@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer, StandardScaler
 
 import gdown
+
 # import kaggle only if doesn't have errors
 try:
     import kaggle
@@ -69,18 +70,6 @@ class DownloadHelper:
         return df
 
 
-# TOOD remove this function
-def read_csv(filename: str, **kwargs) -> pd.DataFrame:
-    df = pd.read_csv(filename, **kwargs)
-    assert isinstance(df, pd.DataFrame)
-    return df
-
-
-# TODO remove this function
-def download_helper(id: str, name: str, quiet: bool = False):
-    gdown.download(id=id, output=name, quiet=quiet)
-
-
 def split_train_test(data, test_size: float, rng):
     if isinstance(data, pd.DataFrame):
         return train_test_split(data, test_size=test_size, random_state=rng)
@@ -118,3 +107,25 @@ def encode_normalize_df(
 
     return X, y, std_scaler, label_bin
 
+
+def compute_outlier(df, col_name, threshold=1.5):
+    if not isinstance(df, pd.DataFrame):
+        series = df
+    else:
+        series = df[col_name]
+    # compute the IQR
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+
+    # compute the lower and upper bound
+    lower_bound = max(q1 - (threshold * iqr), series.min())
+    upper_bound = min(q3 + (threshold * iqr), series.max())
+    print(f"Lower bound: {lower_bound:.2f}")
+    print(f"Upper bound: {upper_bound:.2f}")
+
+    # compute the outliers
+    outliers = df.loc[(series < lower_bound) | (series > upper_bound)]
+    print(f"Number of outliers: {len(outliers)}")
+
+    return outliers
