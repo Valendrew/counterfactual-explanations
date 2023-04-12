@@ -52,7 +52,7 @@ class DataTransformer:
 
         idx = pd.Series([True] * df.shape[0])
         # iterate over the filter conditions and apply the function to the column
-        for col, pat in filter_condition.items():
+        for col, pat in filter_condition:
             idx = idx & pat(df[col])
 
         # drop the unwanted rows and duplicates
