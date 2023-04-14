@@ -235,9 +235,10 @@ def binary_accuracy(y_pred, y_test=None):
 
     return (y_pred_tag == y_test).sum().float()
 
+
 def compute_inverse_class_frequency(y, device):
     class_labels, class_frequency = np.unique(y, return_counts=True)
-    inverse_class_frequency = 1 -(class_frequency / class_frequency.sum())
+    inverse_class_frequency = 1 - (class_frequency / class_frequency.sum())
     return torch.tensor(inverse_class_frequency, dtype=torch.float).to(device)
 
 
@@ -303,6 +304,9 @@ class TrainTestNetwork:
         print_every=2,
         reset_weights=True,
         ce_weights=None,
+        reduce_lr=False,
+        max_accuracy=0,
+        name_model="best_model.pt",
     ):
         # create the data loaders for the training and validation sets
         train_data = TrainData(train_data[0], train_data[1])
@@ -320,6 +324,10 @@ class TrainTestNetwork:
         # set the loss function and the optimizer
         loss_fn = torch.nn.CrossEntropyLoss(weight=ce_weights)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=15, threshold=1e-2, factor=0.5, verbose=True, mode="max"
+        )
+
         # list to store the losses and accuracies
         train_losses, val_losses = [], []
         train_accuracies, val_accuracies = [], []
@@ -334,6 +342,22 @@ class TrainTestNetwork:
             train_accuracies.append(train_acc)
             val_accuracies.append(val_acc)
 
+            if val_acc > max_accuracy:
+                max_accuracy = val_acc
+                torch.save(
+                    {
+                        "model_state_dict": self.model.state_dict(),
+                        "epoch": e,
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "loss": val_loss,
+                    },
+                    name_model,
+                )
+                print(f"Model saved with accuracy: {val_acc:.3f}")
+
+            if reduce_lr:
+                scheduler.step(val_acc)
+
             if e % print_every == 0:
                 print(
                     f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
@@ -346,8 +370,10 @@ class TrainTestNetwork:
         }
 
     def test_model(self, X_test, batch_size=64):
-        test_data = TestData(X_test )
-        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, generator=self.torch_rng)
+        test_data = TestData(X_test)
+        test_loader = DataLoader(
+            dataset=test_data, batch_size=batch_size, generator=self.torch_rng
+        )
         y_pred_list = []
 
         self.model.eval()
@@ -364,19 +390,17 @@ class TrainTestNetwork:
         y_pred_list = [y for ys in y_pred_list for y in ys]
         return y_pred_list
 
-    def kfold_train_model(
-        self, X, y, n_splits, epochs, batch_size=64, lr=0.001, print_every=2, ce_weights=None
-    ):
-        skfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.state_rng)
+    def kfold_train_model(self, X, y, n_splits, **kwargs):
+        skfold = StratifiedKFold(
+            n_splits=n_splits, shuffle=True, random_state=self.state_rng
+        )
         n_losses, n_accuracies = [], []
 
         for i, (train_idx, val_idx) in enumerate(skfold.split(X, y)):
             train_data = (X[train_idx], y[train_idx])
             val_data = (X[val_idx], y[val_idx])
 
-            losses, accuracies = self.train_model(
-                train_data, val_data, epochs, batch_size, lr, print_every, ce_weights=ce_weights
-            )
+            losses, accuracies = self.train_model(train_data, val_data, **kwargs)
 
             n_losses.append(losses)
             n_accuracies.append(accuracies)

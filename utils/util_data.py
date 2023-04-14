@@ -1,6 +1,7 @@
 import os
 import shutil
 
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer, StandardScaler
@@ -129,3 +130,44 @@ def compute_outlier(df, col_name, threshold=1.5):
     print(f"Number of outliers: {len(outliers)}")
 
     return outliers
+
+def get_bins(df:pd.DataFrame, label: str, log=True, cap=False, cap_value=None, verbose=False) -> pd.Series:
+    vvprint = lambda x: print(x, end="\n\n") if verbose else lambda *a, **k: None
+    if cap:
+        assert cap_value is not None
+
+    label_series = df[label].clip(lower=cap_value["low"], upper=cap_value["up"]).copy() if cap else df[label].copy()
+    label_series = np.log(label_series) if log else label_series
+
+    q1 = label_series.quantile(0.25)
+    q3 = label_series.quantile(0.75)
+    vvprint(f"q1: {np.exp(q1) if log else q1:.2f}, q3: {np.exp(q3) if log else q3:.2f}")
+    # Take inter-quartile range
+    iqr = q3 - q1
+    # lower whiskers as 1.5 smaller than iqr
+    lower_bound = max(label_series.min(), q1 - iqr * 1.25)
+    # upper whiskers as 1.5 greater than iqr
+    upper_bound = min(label_series.max(), q3 + iqr * 1.25)
+
+    vvprint(f"lower_bound: {np.exp(lower_bound) if log else lower_bound:.2f}, upper_bound: {np.exp(upper_bound) if log else upper_bound:.2f}")
+
+    # dataframe with outliers removed
+    label_iqr = label_series[label_series.between(lower_bound, upper_bound, inclusive="both")]
+    # label of the bins
+    target_labels = ["low", "low-medium", "medium", "high"]
+    # _, bins = pd.cut(label_iqr, bins=len(target_labels), retbins=True, labels=target_labels)
+    _, bins = pd.qcut(label_iqr, q=4, retbins=True, labels=target_labels, duplicates="raise")
+
+    for i, (l, u) in enumerate(zip(bins[:-1], bins[1:])):
+        vvprint(f"Range {target_labels[i]}: {np.exp(l) if log else l:.2f} - {np.exp(u) if log else u:.2f}")
+
+    bins[0] = label_series.min()
+    bins[-1] = label_series.max()
+    lab_cat = pd.Series(index=label_series.index, dtype="object")
+
+    for i, (l, u) in enumerate(zip(bins[:-1], bins[1:])):
+        vvprint(f"Range {target_labels[i]}: {np.exp(l) if log else l:.2f} - {np.exp(u) if log else u:.2f}")
+        idx = label_series.between(l, u, inclusive="right")
+        lab_cat.loc[idx] = i
+
+    return lab_cat
