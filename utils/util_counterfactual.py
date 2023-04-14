@@ -267,7 +267,7 @@ def create_feature_pyomo_info(X_test, num_cols):
                 The dictionary with the information for each feature.
     '''
     feat_info = {}
-    binary_var = lambda x: 0 if "camera" in x else 1
+    binary_var = lambda x: 1 if ("has_" in x or "is_" in x) else 0
     
     categorical_features = X_test.columns[~X_test.columns.isin(num_cols)]
     # Categorical features
@@ -276,7 +276,7 @@ def create_feature_pyomo_info(X_test, num_cols):
         if not binary_var(col):
             feat_info[col]["domain"] = pyo.Integers
             # Set the 2 extremes as bounds for the feature
-            bounds = tuple(X_test[col].unique()[[0, -1]])
+            bounds = tuple(np.sort(X_test[col].unique())[[0, -1]])
             feat_info[col]["bounds"] = bounds
         else:
             feat_info[col]["domain"] = pyo.Binary
