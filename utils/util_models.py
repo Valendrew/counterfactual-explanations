@@ -221,6 +221,7 @@ class LightGBM:
 def multi_acc(y_pred, y_test=None):
     y_pred_softmax = torch.log_softmax(y_pred, dim=1)
     _, y_pred_tags = torch.max(y_pred_softmax, dim=1)
+
     if y_test is None:
         return y_pred_tags
 
@@ -233,6 +234,11 @@ def binary_accuracy(y_pred, y_test=None):
         return y_pred_tag
 
     return (y_pred_tag == y_test).sum().float()
+
+def compute_inverse_class_frequency(y, device):
+    class_labels, class_frequency = np.unique(y, return_counts=True)
+    inverse_class_frequency = 1 -(class_frequency / class_frequency.sum())
+    return torch.tensor(inverse_class_frequency, dtype=torch.float).to(device)
 
 
 class TrainTestNetwork:
@@ -296,6 +302,7 @@ class TrainTestNetwork:
         lr=0.001,
         print_every=2,
         reset_weights=True,
+        ce_weights=None,
     ):
         # create the data loaders for the training and validation sets
         train_data = TrainData(train_data[0], train_data[1])
@@ -309,8 +316,9 @@ class TrainTestNetwork:
         # reset the weights of the model
         if reset_weights:
             self.model.reset_weights()
+
         # set the loss function and the optimizer
-        loss_fn = torch.nn.CrossEntropyLoss()
+        loss_fn = torch.nn.CrossEntropyLoss(weight=ce_weights)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         # list to store the losses and accuracies
         train_losses, val_losses = [], []
@@ -357,7 +365,7 @@ class TrainTestNetwork:
         return y_pred_list
 
     def kfold_train_model(
-        self, X, y, n_splits, epochs, batch_size=64, lr=0.001, print_every=2
+        self, X, y, n_splits, epochs, batch_size=64, lr=0.001, print_every=2, ce_weights=None
     ):
         skfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.state_rng)
         n_losses, n_accuracies = [], []
@@ -367,7 +375,7 @@ class TrainTestNetwork:
             val_data = (X[val_idx], y[val_idx])
 
             losses, accuracies = self.train_model(
-                train_data, val_data, epochs, batch_size, lr, print_every
+                train_data, val_data, epochs, batch_size, lr, print_every, ce_weights=ce_weights
             )
 
             n_losses.append(losses)
