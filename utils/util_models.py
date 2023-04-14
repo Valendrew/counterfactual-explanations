@@ -218,127 +218,164 @@ class LightGBM:
             print("ERROR: the selected kind of chart is not available.")
 
 
-
-def multi_acc(y_pred, y_test):
+def multi_acc(y_pred, y_test=None):
     y_pred_softmax = torch.log_softmax(y_pred, dim=1)
     _, y_pred_tags = torch.max(y_pred_softmax, dim=1)
+    if y_test is None:
+        return y_pred_tags
 
-    correct_pred = (y_pred_tags == y_test).float()
-    acc = correct_pred.sum().item()
-
-    return acc
-
-
-def train_loop(data_loader, model, loss_fn, optimizer, device):
-    epoch_loss = 0
-    epoch_acc = 0
-
-    model.train()
-    for X_batch, y_batch in data_loader:
-        X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-
-        # forward pass
-        y_pred = model(X_batch)
-        # compute the loss
-        loss = loss_fn(y_pred, y_batch)
-
-        # update parameters
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        epoch_loss += loss.item()
-        epoch_acc += multi_acc(y_pred, y_batch)
-        # epoch_acc += (y_pred.argmax(1) == y_batch).type(torch.float).sum().item()
-
-    return epoch_loss / len(data_loader), epoch_acc * 100 / len(data_loader.dataset)
+    return (y_pred_tags == y_test).sum().float()
 
 
-def test_loop(data_loader, model, loss_fn, device):
-    epoch_loss = 0
-    epoch_acc = 0
+def binary_accuracy(y_pred, y_test=None):
+    y_pred_tag = torch.round(torch.sigmoid(y_pred))
+    if y_test is None:
+        return y_pred_tag
 
-    model.eval()
-    with torch.no_grad():
-        for X_batch, y_batch in data_loader:
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-            # inference
-            y_pred = model(X_batch)
-            # loss
-            epoch_loss += loss_fn(y_pred, y_batch).item()
-            # accuracy
-            epoch_acc += multi_acc(y_pred, y_batch)
-
-    return epoch_loss / len(data_loader), epoch_acc * 100 / len(data_loader.dataset)
+    return (y_pred_tag == y_test).sum().float()
 
 
-def train_model(train_loader, val_loader, model, device, LR, EPOCHS, print_every=2):
-    model.reset_weights()
+class TrainTestNetwork:
+    def __init__(self, model, metric_fn, device, seed):
+        self.model = model
+        self.metric_fn = metric_fn
+        self.device = device
+        self.state_rng = np.random.RandomState(seed)
+        self.torch_rng = torch.manual_seed(seed)
 
-    loss_fn = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    def __train_loop(self, train_loader, loss_fn, optimizer):
+        epoch_loss = 0
+        epoch_acc = 0
 
-    train_losses, val_losses = [], []
-    train_accuracies, val_accuracies = [], []
-    for e in range(1, EPOCHS + 1):
-        train_loss, train_acc = train_loop(
-            train_loader, model, loss_fn, optimizer, device
+        self.model.train()
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+
+            # forward pass
+            y_pred = self.model(X_batch)
+            # compute the loss
+            loss = loss_fn(y_pred, y_batch)
+
+            # update parameters
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            epoch_acc += self.metric_fn(y_pred, y_batch)
+
+        loss_val = epoch_loss / len(train_loader)
+        accuracy_val = epoch_acc * 100 / len(train_loader.dataset)
+        return loss_val, accuracy_val
+
+    def __test_loop(self, test_loader, loss_fn):
+        epoch_loss = 0
+        epoch_acc = 0
+
+        self.model.eval()
+        with torch.no_grad():
+            for X_batch, y_batch in test_loader:
+                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+                # inference
+                y_pred = self.model(X_batch)
+                # loss
+                epoch_loss += loss_fn(y_pred, y_batch).item()
+                # accuracy
+                epoch_acc += self.metric_fn(y_pred, y_batch)
+
+        loss_val = epoch_loss / len(test_loader)
+        accuracy_val = epoch_acc * 100 / len(test_loader.dataset)
+        return loss_val, accuracy_val
+
+    def train_model(
+        self,
+        train_data,
+        val_data,
+        epochs,
+        batch_size=64,
+        lr=0.001,
+        print_every=2,
+        reset_weights=True,
+    ):
+        # create the data loaders for the training and validation sets
+        train_data = TrainData(train_data[0], train_data[1])
+        train_loader = DataLoader(
+            train_data, batch_size=batch_size, shuffle=True, generator=self.torch_rng
         )
-        val_loss, val_acc = test_loop(val_loader, model, loss_fn, device)
+        val_data = TrainData(val_data[0], val_data[1])
+        val_loader = DataLoader(
+            val_data, batch_size=batch_size, shuffle=False, generator=self.torch_rng
+        )
+        # reset the weights of the model
+        if reset_weights:
+            self.model.reset_weights()
+        # set the loss function and the optimizer
+        loss_fn = torch.nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        # list to store the losses and accuracies
+        train_losses, val_losses = [], []
+        train_accuracies, val_accuracies = [], []
 
-        train_losses.append(train_loss)
-        val_losses.append(val_loss)
-        train_accuracies.append(train_acc)
-        val_accuracies.append(val_acc)
+        # train the model for the specified number of epochs
+        for e in range(1, epochs + 1):
+            train_loss, train_acc = self.__train_loop(train_loader, loss_fn, optimizer)
+            val_loss, val_acc = self.__test_loop(val_loader, loss_fn)
 
-        if e % print_every == 0:
-            print(
-                f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            train_accuracies.append(train_acc)
+            val_accuracies.append(val_acc)
+
+            if e % print_every == 0:
+                print(
+                    f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
+                )
+
+        # return the losses and accuracies
+        return {"train": train_losses, "val": val_losses}, {
+            "train": train_accuracies,
+            "val": val_accuracies,
+        }
+
+    def test_model(self, X_test, batch_size=64):
+        test_data = TestData(X_test )
+        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, generator=self.torch_rng)
+        y_pred_list = []
+
+        self.model.eval()
+        with torch.no_grad():
+            for X_batch in test_loader:
+                X_batch = X_batch.to(self.device)
+
+                # inference
+                y_pred = self.model(X_batch)
+                y_pred_tags = self.metric_fn(y_pred)
+
+                y_pred_list.append(y_pred_tags.cpu().numpy())
+
+        y_pred_list = [y for ys in y_pred_list for y in ys]
+        return y_pred_list
+
+    def kfold_train_model(
+        self, X, y, n_splits, epochs, batch_size=64, lr=0.001, print_every=2
+    ):
+        skfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.state_rng)
+        n_losses, n_accuracies = [], []
+
+        for i, (train_idx, val_idx) in enumerate(skfold.split(X, y)):
+            train_data = (X[train_idx], y[train_idx])
+            val_data = (X[val_idx], y[val_idx])
+
+            losses, accuracies = self.train_model(
+                train_data, val_data, epochs, batch_size, lr, print_every
             )
-    return {"train": train_losses, "val": val_losses}, {
-        "train": train_accuracies,
-        "val": val_accuracies,
-    }
 
+            n_losses.append(losses)
+            n_accuracies.append(accuracies)
 
-def test_model(data_loader, model, device):
-    y_pred_list = []
-    model.eval()
-    with torch.no_grad():
-        for X_batch in data_loader:
-            X_batch = X_batch.to(device)
-            # inference
-            y_pred = model(X_batch)
-            y_prob = torch.log_softmax(y_pred, dim=1)
-            _, y_pred_tags = torch.max(y_prob, dim=1)
+            print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .2f}\n")
 
-            y_pred_list.append(y_pred_tags.cpu().numpy())
-
-    y_pred_list = [y.item() for ys in y_pred_list for y in ys]
-    return y_pred_list
-
-
-def kfold_train_model(
-    X, y, n_splits, seed, batch_size, model, device, lr, epochs, print_every
-):
-    skfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    n_losses, n_accuracies = [], []
-
-    for i, (train_idx, val_idx) in enumerate(skfold.split(X, y)):
-        train_data = TrainData(X[train_idx], y[train_idx])
-        val_data = TrainData(X[val_idx], y[val_idx])
-        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_data, batch_size=batch_size)
-
-        losses, accuracies = train_model(
-            train_loader, val_loader, model, device, lr, epochs, print_every
-        )
-        n_losses.append(losses)
-        n_accuracies.append(accuracies)
-
-        print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .2f}\n")
-
-    return n_losses, n_accuracies
+        return n_losses, n_accuracies
 
 
 class FixedLinearRegressor(LinearRegression):

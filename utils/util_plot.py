@@ -73,3 +73,25 @@ def plot_compare_models(X, y, y_pred, names, title):
     plt.title(title)
     plt.legend()
     plt.show()
+
+
+def plot_series_distribution(series, title):
+    fig, ax = plt.subplots(figsize=(8, 8), nrows=2)
+    ax = ax.ravel()
+
+    # histogram of conversion rates
+    series.hist(bins=20, edgecolor="black", linewidth=1.2, ax=ax[0])
+    ax[0].set_xticks(np.arange(round(series.min()), round(series.max()) + 2, 3))
+    # boxplot of conversion rates
+    series.plot.box(whis=1.5, ax=ax[1])
+    # get median conversion rate
+    median_conv_rate = series.median()
+    # yticks lower than median
+    yticks_lower = np.arange(round(series.min()), round(median_conv_rate), 4)
+    # yticks higher than median
+    yticks_higher = np.arange(round(median_conv_rate), round(series.max()) + 1, 4)
+    # set xticks
+    ax[1].set_yticks(np.concatenate((yticks_lower, yticks_higher)))
+
+    fig.suptitle("Distribution of conversion rates")
+    fig.tight_layout()
