@@ -47,7 +47,7 @@ def features_constraints(pyo_model, feat_info):
         pyo_model.nn.inputs[idx].bounds = bounds
 
 
-def compute_obj_1(pyo_model, cf_class, range_prob=0.51):
+def compute_obj_1(pyo_model, cf_class, num_classes, range_prob=0.51):
     ''' 
         It creates the objective function to minimize the distance between the
         predicted and the desired class.
@@ -57,6 +57,8 @@ def compute_obj_1(pyo_model, cf_class, range_prob=0.51):
                 The pyomo model to consider.
             - cf_class: int
                 The class that the counterfactual should have after the generation.
+            - num_classes: int
+                The number of classes of the task.
             - range_prob: float
                 An accepted value for the probability of the predicted class.
 
@@ -64,7 +66,7 @@ def compute_obj_1(pyo_model, cf_class, range_prob=0.51):
             It returns the pyomo variable that contains the value to optimize.
     '''
     range_prob = range_prob
-    prob_y = lambda x: my_softmax(x, 4, cf_class)
+    prob_y = lambda x: my_softmax(x, num_classes, cf_class)
 
     # something
     pyo_model.q_relu = pyo.Var(within=pyo.Binary)
@@ -296,7 +298,7 @@ def create_feature_pyomo_info(X_test, num_cols):
 
 class OmltCounterfactual:
 
-    def __init__(self, X_test, y_test, nn_model, num_feat):
+    def __init__(self, X_test, y_test, nn_model, num_feat, num_classes):
         '''
             It is the class used to generate counterfactuals with OMLT.
 
@@ -310,15 +312,17 @@ class OmltCounterfactual:
                     counterfactual generation.
                 - num_feat: list[str]
                     The list of continuous features.
+                - num_classes: int
+                    The number of classes of the task.
         '''
         self.X_test = X_test
         self.y_test = y_test
         self.nn_model = nn_model
         self.num_feat = num_feat
+        self.num_classes = num_classes
         self.feat_info = create_feature_pyomo_info(self.X_test, self.num_feat)
 
         self.__create_network_formulation(-1, 1)
-
 
 
     def __create_network_formulation(self, lb, ub):
@@ -377,7 +381,7 @@ class OmltCounterfactual:
 
 
     def __compute_objectives(self, orig_sample, cf_class, range_prob, bounds_o3=(0, 20),
-                             obj_weights=[1,1,1], not_vary=[]):
+                             obj_weights=[1, 1, 1], not_vary=[]):
         '''
             It computes the objective functions to optimize to generate the
             counterfactuals.
@@ -385,7 +389,7 @@ class OmltCounterfactual:
         '''
         
         # OBJECTIVE 1
-        obj_1 = compute_obj_1(self.pyo_model, cf_class, range_prob)
+        obj_1 = compute_obj_1(self.pyo_model, cf_class, self.num_classes, range_prob)
 
         # OBJECTIVE 2
         # Dataframes with continuous and categorical features
@@ -636,8 +640,4 @@ class DiceCounterfactual:
             ).format(precision=3)
             comp_dfs.append(comp_df)
         return comp_dfs
-
-
-
-
 
