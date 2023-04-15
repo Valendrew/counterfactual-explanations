@@ -47,7 +47,7 @@ def features_constraints(pyo_model, feat_info):
         pyo_model.nn.inputs[idx].bounds = bounds
 
 
-def compute_obj_1(pyo_model, cf_class, num_classes, range_prob=0.51):
+def compute_obj_1(pyo_model, cf_class, min_logit=2):
     ''' 
         It creates the objective function to minimize the distance between the
         predicted and the desired class.
@@ -65,37 +65,97 @@ def compute_obj_1(pyo_model, cf_class, num_classes, range_prob=0.51):
         Returns:
             It returns the pyomo variable that contains the value to optimize.
     '''
-    range_prob = range_prob
-    prob_y = lambda x: my_softmax(x, num_classes, cf_class)
+    # prob_y = lambda x: my_softmax(x, num_classes, cf_class)
 
     # something
-    pyo_model.q_relu = pyo.Var(within=pyo.Binary)
+    pyo_model.obj1_q_relu = pyo.Var(within=pyo.Binary, initialize=0)
+
     # constraints
-    pyo_model._z_lower_bound_relu = pyo.Constraint()
-    pyo_model._z_lower_bound_zhat_relu = pyo.Constraint()
-    pyo_model._z_upper_bound_relu = pyo.Constraint()
-    pyo_model._z_upper_bound_zhat_relu = pyo.Constraint()
+    pyo_model.obj1_z_lower_bound_relu = pyo.Constraint()
+    pyo_model.obj1_z_lower_bound_zhat_relu = pyo.Constraint()
+    pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
+    pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
+
+    l, u = (-15, 15)
 
     # set dummy parameters here to avoid warning message from Pyomo
-    pyo_model._big_m_lb_relu = pyo.Param(default=-1e6, mutable=True)
-    pyo_model._big_m_ub_relu = pyo.Param(default=1e6, mutable=True)
+    pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
+    pyo_model.obj1_big_m_ub_relu = pyo.Param(default=u, mutable=False)
 
     # define difference of the output
-    lb, ub = (-1, 1)
-    pyo_model.diff_prob = pyo.Var(within=pyo.Reals, bounds=(lb, ub), initialize=0)
-    pyo_model.diff_prob = range_prob - prob_y(pyo_model.nn.outputs)
+    pyo_model.obj1_diff_prob = pyo.Var(within=pyo.Reals, bounds=(l, u), initialize=0)
 
     # define variable for max(0, output)
-    pyo_model.max_val = pyo.Var(within=pyo.NonNegativeReals, bounds=(0, ub))
-    pyo_model._big_m_lb_relu = lb
-    pyo_model._big_m_ub_relu = ub
+    pyo_model.obj1_max_val = pyo.Var(within=pyo.NonNegativeReals, bounds=(0, u), initialize=0)
 
-    pyo_model._z_lower_bound_relu = pyo_model.max_val >= 0
-    pyo_model._z_lower_bound_zhat_relu = pyo_model.max_val >= pyo_model.diff_prob
-    pyo_model._z_upper_bound_relu= pyo_model.max_val <= pyo_model._big_m_ub_relu * pyo_model.q_relu
-    pyo_model._z_upper_bound_zhat_relu = pyo_model.max_val <= pyo_model.diff_prob - pyo_model._big_m_lb_relu * (1.0 - pyo_model.q_relu)
+    # constrains the difference of the probabilities
+    pyo_model.obj1_diff_prob_constr = pyo.Constraint(expr=pyo_model.obj1_diff_prob == min_logit - pyo_model.nn.outputs[cf_class])
+    # pyo_model.obj1_diff_prob == min_probability - pyo_model.nn.outputs[cf_class]
 
-    return pyo_model.max_val
+    pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
+    pyo_model.obj1_z_lower_bound_zhat_relu = pyo_model.obj1_max_val >= pyo_model.obj1_diff_prob
+    pyo_model.obj1_z_upper_bound_relu= pyo_model.obj1_max_val <= pyo_model.obj1_big_m_ub_relu * pyo_model.obj1_q_relu
+    pyo_model.obj1_z_upper_bound_zhat_relu = pyo_model.obj1_max_val <= pyo_model.obj1_diff_prob - pyo_model.obj1_big_m_lb_relu * (1.0 - pyo_model.obj1_q_relu)
+
+    return pyo_model.obj1_max_val
+
+
+def compute_obj1_new(pyo_model, cf_class, num_classes):
+    ''' 
+        It creates the objective function to minimize the distance between the
+        predicted and the desired class.
+
+        Parameters:
+            - pyo_model:
+                The pyomo model to consider.
+            - cf_class: int
+                The class that the counterfactual should have after the generation.
+            - num_classes: int
+                The number of classes of the task.
+            - range_prob: float
+                An accepted value for the probability of the predicted class.
+
+        Returns:
+            It returns the pyomo variable that contains the value to optimize.
+    '''
+    # set of classes
+    classes_set = pyo.Set(initialize=range(0, num_classes - 1))
+
+    pyo_model.obj1_q_relu = pyo.Var(classes_set, within=pyo.Binary, initialize=0)
+
+    # constraints
+    pyo_model.obj1_z_lower_bound_relu = pyo.Constraint(classes_set)
+    pyo_model.obj1_z_lower_bound_zhat_relu = pyo.Constraint(classes_set)
+    pyo_model.obj1_z_upper_bound_relu = pyo.Constraint(classes_set)
+    pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint(classes_set)
+
+    l, u = (-15, 15)
+
+    # set dummy parameters here to avoid warning message from Pyomo
+    pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
+    pyo_model.obj1_big_m_ub_relu = pyo.Param(default=u, mutable=False)
+
+    # define difference of the output
+    pyo_model.obj1_diff_prob = pyo.Var(classes_set, within=pyo.Reals, bounds=(l, u), initialize=0)
+    # define variable for max(0, output)
+    pyo_model.obj1_max_val = pyo.Var(classes_set, within=pyo.NonNegativeReals, bounds=(0, u), initialize=0)
+
+    # constrains the difference of the probabilities
+    pyo_model.obj1_diff_prob_constr = pyo.Constraint(classes_set)
+
+    available_classes = list(set(range(0, num_classes)) - set([cf_class]))
+    threshold = 0.5
+    for i, idx in enumerate(available_classes):
+        pyo_model.obj1_diff_prob_constr[i] = (
+            pyo_model.obj1_diff_prob[i] ==  pyo_model.nn.outputs[cf_class] - pyo_model.nn.outputs[idx] + threshold
+        )
+
+        pyo_model.obj1_z_lower_bound_relu[i] = pyo_model.obj1_max_val[i] >= 0
+        pyo_model.obj1_z_lower_bound_zhat_relu[i] = pyo_model.obj1_max_val[i] >= pyo_model.obj1_diff_prob[i]
+        pyo_model.obj1_z_upper_bound_relu[i]= pyo_model.obj1_max_val[i] <= pyo_model.obj1_big_m_ub_relu * pyo_model.obj1_q_relu[i]
+        pyo_model.obj1_z_upper_bound_zhat_relu[i] = pyo_model.obj1_max_val[i] <= pyo_model.obj1_diff_prob[i] - pyo_model.obj1_big_m_lb_relu * (1.0 - pyo_model.obj1_q_relu[i])
+
+    return sum([pyo_model.obj1_max_val[i] for i in range(0, num_classes - 1)])
 
 
 def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
@@ -114,7 +174,6 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
                 The values of the original sample for which the counterfactual is 
                 generated.
     '''
-    L, U = bounds
     # Set of indexes for the features
     feat_set = pyo.Set(initialize=range(0, len(idx_cat)))
 
@@ -125,17 +184,20 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
 
     cat_dist = 0
     for i, idx in enumerate(idx_cat):
+        range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
+
         pyo_model.diff_o2[i] = (sample[idx] - pyo_model.nn.inputs[idx])**2
 
-        pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
+        pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= pyo_model.b_o2[i]
+        # pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
         # Add a +1 at the end because pyomo needs <= and not <
-        pyo_model.constr_great_o2[i] = pyo_model.diff_o2[i] <= (pyo_model.b_o2[i]*(U-1) + 1)+1
+        pyo_model.constr_great_o2[i] = pyo_model.diff_o2[i] <= (pyo_model.b_o2[i]* range_i) + 1
         cat_dist += pyo_model.b_o2[i]
 
     return cat_dist
 
 
-def gower_distance(x, cat, num, ranges, pyo_model, feat_info):
+def gower_distance(x, cat, cont, pyo_model, feat_info, bounds):
     '''
         It computes the Gower distance.
 
@@ -155,15 +217,16 @@ def gower_distance(x, cat, num, ranges, pyo_model, feat_info):
     features_constraints(pyo_model, feat_info)
 
     num_dist = 0
-    for i, idx in enumerate(num):
-        num_dist += (1/ranges[i])*((x[idx]-pyo_model.nn.inputs[idx])**2)
+    for idx in cont:
+        range_i  = bounds[1][idx] - bounds[0][idx]
+        num_dist += (1/range_i)*((x[idx]-pyo_model.nn.inputs[idx])**2)
     
-    cat_dist = create_cat_constraints_obj_2(pyo_model, (0, 20), cat, x)
+    cat_dist = create_cat_constraints_obj_2(pyo_model, bounds, cat, x)
 
     return (cat_dist+num_dist)/len(x)
 
 
-def compute_obj_3(pyo_model, bounds, n_feat, sample):
+def compute_obj_3(pyo_model, bounds, sample):
     '''
         It creates the third objective function, that limits the number of features
         changed during counterfactual.
@@ -178,7 +241,8 @@ def compute_obj_3(pyo_model, bounds, n_feat, sample):
             - sample: np.ndarray
                 The original sample for which the counterfactual is created.
     '''
-    L, U = bounds
+    # L, U = bounds
+    n_feat = len(sample)
     # Set of indexes for the features
     feat_set = pyo.Set(initialize=range(0, n_feat))
 
@@ -189,11 +253,12 @@ def compute_obj_3(pyo_model, bounds, n_feat, sample):
 
     changed = 0
     for i in range(n_feat):
+        range_i = (bounds[1][i] - bounds[0][i]) ** 2
         pyo_model.diff_o3[i] = (sample[i] - pyo_model.nn.inputs[i])**2
 
-        pyo_model.constr_less_o3[i] = pyo_model.diff_o3[i] >= (pyo_model.b_o3[i]*(-L+1))+L
+        pyo_model.constr_less_o3[i] = pyo_model.diff_o3[i] >= pyo_model.b_o3[i]
         # Add a +1 at the end because pyomo needs <= and not <
-        pyo_model.constr_great_o3[i] = pyo_model.diff_o3[i] <= (pyo_model.b_o3[i]*(U-1) + 1)+1
+        pyo_model.constr_great_o3[i] = pyo_model.diff_o3[i] <= (pyo_model.b_o3[i]*range_i)+1
         changed += pyo_model.b_o3[i]
 
     return changed
@@ -253,7 +318,7 @@ def get_counterfactual_class(initial_class, num_classes, lower=True):
     return initial_class + counterfactual_op
  
 
-def create_feature_pyomo_info(X_test, num_cols):
+def create_feature_pyomo_info(X: pd.Series, continuous_features, categorical_features):
     '''
         It creates a dictionary that contains, for each feature in X_test, the
         domain, the bounds and the position of the feature (column index).
@@ -269,36 +334,31 @@ def create_feature_pyomo_info(X_test, num_cols):
                 The dictionary with the information for each feature.
     '''
     feat_info = {}
-    binary_var = lambda x: 1 if ("has_" in x or "is_" in x) else 0
     
-    categorical_features = X_test.columns[~X_test.columns.isin(num_cols)]
-    # Categorical features
-    for col in categorical_features:
-        feat_info[col] = {}
-        if not binary_var(col):
+    for i, col in enumerate(X.columns.tolist()):
+        # Categorical features
+        if col in categorical_features:
+            feat_info[col] = {}
             feat_info[col]["domain"] = pyo.Integers
             # Set the 2 extremes as bounds for the feature
-            bounds = tuple(np.sort(X_test[col].unique())[[0, -1]])
-            feat_info[col]["bounds"] = bounds
+            feat_info[col]["bounds"] = X[col].min(), X[col].max()
+            feat_info[col]["index"] = i
+        # Continuous features
+        elif col in continuous_features:
+            feat_info[col] = {}
+            feat_info[col]["domain"] = pyo.Reals
+            feat_info[col]["bounds"] = (-1, 1)
+            feat_info[col]["index"] = i
         else:
-            feat_info[col]["domain"] = pyo.Binary
-            feat_info[col]["bounds"] = (0, 1)
-        feat_info[col]["index"] = X_test.columns.tolist().index(col)
-        
-    # Continuous features
-    for col in num_cols:
-        feat_info[col] = {}
-        feat_info[col]["domain"] = pyo.Reals
-        feat_info[col]["bounds"] = (-1, 1)
-        feat_info[col]["index"] = X_test.columns.tolist().index(col)
-        
+            print("ERROR: the feature {} is not present in the dataset.".format(col))
+            return None
     return feat_info
 
 
 
 class OmltCounterfactual:
 
-    def __init__(self, X_test, y_test, nn_model, num_feat, num_classes):
+    def __init__(self, X, y, nn_model, continuous_feat, num_classes):
         '''
             It is the class used to generate counterfactuals with OMLT.
 
@@ -315,12 +375,14 @@ class OmltCounterfactual:
                 - num_classes: int
                     The number of classes of the task.
         '''
-        self.X_test = X_test
-        self.y_test = y_test
+        self.X = X
+        self.y = y
         self.nn_model = nn_model
-        self.num_feat = num_feat
+        self.continuous_feat = continuous_feat
+        self.categorical_feat = X.columns.drop(continuous_feat).to_list()
         self.num_classes = num_classes
-        self.feat_info = create_feature_pyomo_info(self.X_test, self.num_feat)
+        self.feat_info = create_feature_pyomo_info(self.X, self.continuous_feat, self.categorical_feat)
+        self.SUPPORTED_OBJECTIVES = 3
 
         self.__create_network_formulation(-1, 1)
 
@@ -335,15 +397,16 @@ class OmltCounterfactual:
                     The value to use as lower bound for the features.
                 - ub: int
                     The value to use as upper bound for the features.
-        '''
-        tmp_sample = self.X_test.values[0].reshape((1, -1))
-        dummy_sample = torch.tensor(tmp_sample, dtype=torch.float)
 
-        lb = np.repeat(lb, dummy_sample.size(1))
-        ub = np.repeat(ub, dummy_sample.size(1))
+        '''
+        # Create a dummy sample to export the model
+        n_features = self.X.shape[1]
+        dummy_sample = torch.zeros(size=(1, n_features), dtype=torch.float)
+        lb = np.repeat(lb, n_features)
+        ub = np.repeat(ub, n_features)
 
         input_bounds = {}
-        for i in range(self.X_test.shape[1]):
+        for i in range(n_features):
             input_bounds[i] = (float(lb[i]), float(ub[i]))
 
         with tempfile.NamedTemporaryFile(suffix='.onnx', delete=False) as f:
@@ -380,48 +443,53 @@ class OmltCounterfactual:
         self.pyo_model.nn.build_formulation(self.formulation)
 
 
-    def __compute_objectives(self, orig_sample, cf_class, range_prob, bounds_o3=(0, 20),
-                             obj_weights=[1, 1, 1], not_vary=[]):
+    def __compute_objectives(self, sample, cf_class, min_probability, obj_weights=[1, 1, 1], not_vary=[]):
         '''
             It computes the objective functions to optimize to generate the
             counterfactuals.
             For the parameters explanation check "generate_counterfactuals" function.
         '''
+        assert len(obj_weights) == self.SUPPORTED_OBJECTIVES, "The number of objectives is not correct."
         
         # OBJECTIVE 1
-        obj_1 = compute_obj_1(self.pyo_model, cf_class, self.num_classes, range_prob)
+        if obj_weights[0] == 0:
+            obj_1 = 0
+        else:
+            obj_1 = compute_obj1_new(self.pyo_model, cf_class, self.num_classes)
+            # obj_1 = compute_obj_1(self.pyo_model, cf_class, self.num_classes, min_probability)
 
         # OBJECTIVE 2
         # Dataframes with continuous and categorical features
-        num_df = self.X_test.loc[:, self.X_test.columns.isin(self.num_feat)]
-        cat_df = self.X_test.loc[:, ~self.X_test.columns.isin(self.num_feat)]
+        cont_df = self.X.loc[:, self.continuous_feat]
+        cat_df = self.X.loc[:, self.categorical_feat]
 
         # We need the index of the features to differentiate in the gower distance
-        idx_cont = [self.X_test.columns.get_loc(col) for col in num_df.columns]
-        idx_cat = [self.X_test.columns.get_loc(col) for col in cat_df.columns]
+        idx_cont = [self.X.columns.get_loc(col) for col in cont_df.columns]
+        idx_cat = [self.X.columns.get_loc(col) for col in cat_df.columns]
 
-        cont_ranges = (num_df.max() - num_df.min()).values
-        gower_dist = gower_distance(orig_sample, idx_cat, idx_cont, cont_ranges, 
-                                    self.pyo_model, self.feat_info)
+        # cont_ranges = (cont_df.max() - cont_df.min()).values
+        bounds = self.X.min().values, self.X.max().values
+        if obj_weights[1] == 0:
+            print(f"Objective 2 is set to 0, so the gower distance will be 0")
+            gower_dist = 1
+        else:
+            gower_dist = gower_distance(sample, idx_cat, idx_cont, self.pyo_model, self.feat_info, bounds=bounds)
 
         # OBJECTIVE 3
-        obj_3 = compute_obj_3(self.pyo_model, (0, 20), 
-                                        len(orig_sample), orig_sample)
+        if obj_weights[2] == 0:
+            obj_3 = 1
+            print(f"Objective 3 is set to 0, so the distance from the original sample will be 0")
+        else:
+            obj_3 = compute_obj_3(self.pyo_model, bounds, sample)
         
         # Don't change some features
-        limit_counterfactual(self.pyo_model, orig_sample, not_vary, self.feat_info)
-
-        if len(obj_weights) != 3:
-            print("WARNING: you don't provide the correct number of weights for the objectives, the default value will be used.")
-            obj_weights = [1, 1, 1]
+        # limit_counterfactual(self.pyo_model, orig_sample, not_vary, self.feat_info)
 
         final_obj = obj_weights[0]*obj_1 + obj_weights[1]*gower_dist + obj_weights[2]*obj_3
         self.pyo_model.obj = pyo.Objective(expr=final_obj)
 
     
-    def generate_counterfactuals(self, orig_sample, new_class, solver_path, range_prob,
-                                 bounds_o3=(0, 20), obj_weights=[1, 1, 1], not_vary=[],
-                                 verbose=True):
+    def generate_counterfactuals(self, orig_sample, new_class, solver_path, min_probability, obj_weights=[1, 1, 1], not_vary=[], verbose=True):
         '''
             It generates the counterfactual for the passed sample and it returns 
             it.
@@ -451,15 +519,19 @@ class OmltCounterfactual:
         # Reset the pyomo model
         self.__build_model()
         # Set the objective function
-        self.__compute_objectives(orig_sample, new_class, range_prob, bounds_o3,
-                                  obj_weights, not_vary)
+        self.__compute_objectives(orig_sample, new_class, min_probability, obj_weights, not_vary)
+        
+        solver_factory = pyo.SolverFactory('cplex', executable=solver_path)
+        # solver_factory.set_options("timeLimit=60")
+        solver_factory.options["timelimit"] = 120
+        # solver_factory.options["emphasis_mip"] = 2
 
-        pyo_solution = pyo.SolverFactory('cplex', executable=solver_path).solve(self.pyo_model, tee=verbose)
+        pyo_solution = solver_factory.solve(self.pyo_model, tee=verbose)
         
         # Convert the dictionary to a list of values
         cf = list(self.pyo_model.nn.inputs.get_values().values())
 
-        return pd.DataFrame(np.array(cf, ndmin=2), columns=self.X_test.columns)
+        return pd.DataFrame(np.array(cf, ndmin=2), columns=self.X.columns)
 
 
 
