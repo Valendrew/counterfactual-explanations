@@ -109,8 +109,8 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
             - idx_cat: list[int]
                 The indexes of the categorical features that we need to compare.
             - sample: np.ndarray
-                The values for the categorical features of the original sample 
-                for which the counterfactual is generated.
+                The values of the original sample for which the counterfactual is 
+                generated.
     '''
     L, U = bounds
     # Set of indexes for the features
@@ -123,7 +123,7 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
 
     cat_dist = 0
     for i, idx in enumerate(idx_cat):
-        pyo_model.diff_o2[i] = (sample[i] - pyo_model.nn.inputs[idx])**2
+        pyo_model.diff_o2[i] = (sample[idx] - pyo_model.nn.inputs[idx])**2
 
         pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
         # Add a +1 at the end because pyomo needs <= and not <
@@ -156,7 +156,7 @@ def gower_distance(x, cat, num, ranges, pyo_model, feat_info):
     for i, idx in enumerate(num):
         num_dist += (1/ranges[i])*((x[idx]-pyo_model.nn.inputs[idx])**2)
     
-    cat_dist = create_cat_constraints_obj_2(pyo_model, (0, 20), cat, x[cat])
+    cat_dist = create_cat_constraints_obj_2(pyo_model, (0, 20), cat, x)
 
     return (cat_dist+num_dist)/len(x)
 
@@ -282,7 +282,14 @@ def create_feature_pyomo_info(X_test, num_cols):
             feat_info[col]["domain"] = pyo.Binary
             feat_info[col]["bounds"] = (0, 1)
         feat_info[col]["index"] = X_test.columns.tolist().index(col)
-
+        
+    # Continuous features
+    for col in num_cols:
+        feat_info[col] = {}
+        feat_info[col]["domain"] = pyo.Reals
+        feat_info[col]["bounds"] = (-1, 1)
+        feat_info[col]["index"] = X_test.columns.tolist().index(col)
+        
     return feat_info
 
 
