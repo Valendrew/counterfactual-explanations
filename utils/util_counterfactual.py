@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import torch
 import pandas as pd
@@ -90,6 +92,52 @@ def compute_obj_1(pyo_model, cf_class, min_logit=2):
 
     # constrains the difference of the probabilities
     pyo_model.obj1_diff_prob_constr = pyo.Constraint(expr=pyo_model.obj1_diff_prob == min_logit - pyo_model.nn.outputs[cf_class])
+    # pyo_model.obj1_diff_prob == min_probability - pyo_model.nn.outputs[cf_class]
+
+    pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
+    pyo_model.obj1_z_lower_bound_zhat_relu = pyo_model.obj1_max_val >= pyo_model.obj1_diff_prob
+    pyo_model.obj1_z_upper_bound_relu= pyo_model.obj1_max_val <= pyo_model.obj1_big_m_ub_relu * pyo_model.obj1_q_relu
+    pyo_model.obj1_z_upper_bound_zhat_relu = pyo_model.obj1_max_val <= pyo_model.obj1_diff_prob - pyo_model.obj1_big_m_lb_relu * (1.0 - pyo_model.obj1_q_relu)
+
+    return pyo_model.obj1_max_val
+
+def compute_obj_1_marginal_softmax(pyo_model, cf_class, max_classes, min_probability=2):
+    # prob_y = lambda x: my_softmax(x, num_classes, cf_class)
+
+    # something
+    pyo_model.obj1_q_relu = pyo.Var(within=pyo.Binary, initialize=0)
+
+    # constraints
+    pyo_model.obj1_z_lower_bound_relu = pyo.Constraint()
+    pyo_model.obj1_z_lower_bound_zhat_relu = pyo.Constraint()
+    pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
+    pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
+
+    l, u = (0, 10)
+
+    # set dummy parameters here to avoid warning message from Pyomo
+    pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
+    pyo_model.obj1_big_m_ub_relu = pyo.Param(default=u, mutable=False)
+
+    # define difference of the output
+    pyo_model.obj1_diff_prob = pyo.Var(within=pyo.Reals, bounds=(l, u), initialize=0)
+
+    # define variable for max(0, output)
+    pyo_model.obj1_max_val = pyo.Var(within=pyo.NonNegativeReals, bounds=(0, u), initialize=0)
+
+    # define variable for marginal softmax
+    pyo_model.obj1_marginal_softmax = pyo.Var(bounds=(l, u), initialize=0)
+
+    # constraints the marginal softmax
+    def softmax_constr_rule(m):
+        # vals = [math.e ** m.nn.outputs[i] for i in range(max_classes)]
+        # return m.obj1_marginal_softmax == pyo.log(vals[0] + vals[1] + vals[2]) - m.nn.outputs[cf_class]
+        return m.obj1_marginal_softmax == pyo.log(sum([pyo.exp(m.nn.outputs[i]) for i in range(max_classes)])) - m.nn.outputs[cf_class]
+
+    pyo_model.obj1_marginal_softmax_constr = pyo.Constraint(rule=softmax_constr_rule(pyo_model))
+
+    # constrains the difference of the probabilities
+    pyo_model.obj1_diff_prob_constr = pyo.Constraint(expr=pyo_model.obj1_diff_prob == pyo_model.obj1_marginal_softmax - min_probability)
     # pyo_model.obj1_diff_prob == min_probability - pyo_model.nn.outputs[cf_class]
 
     pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
@@ -455,7 +503,8 @@ class OmltCounterfactual:
         if obj_weights[0] == 0:
             obj_1 = 0
         else:
-            obj_1 = compute_obj1_new(self.pyo_model, cf_class, self.num_classes)
+            obj_1 = compute_obj_1_marginal_softmax(self.pyo_model, cf_class, 3, min_probability)
+            # obj_1 = compute_obj1_new(self.pyo_model, cf_class, self.num_classes)
             # obj_1 = compute_obj_1(self.pyo_model, cf_class, self.num_classes, min_probability)
 
         # OBJECTIVE 2
@@ -489,7 +538,7 @@ class OmltCounterfactual:
         self.pyo_model.obj = pyo.Objective(expr=final_obj)
 
     
-    def generate_counterfactuals(self, orig_sample, new_class, solver_path, min_probability, obj_weights=[1, 1, 1], not_vary=[], verbose=True):
+    def generate_counterfactuals(self, orig_sample, new_class, min_probability, solver_path, obj_weights=[1, 1, 1], not_vary=[], verbose=True):
         '''
             It generates the counterfactual for the passed sample and it returns 
             it.
@@ -521,12 +570,14 @@ class OmltCounterfactual:
         # Set the objective function
         self.__compute_objectives(orig_sample, new_class, min_probability, obj_weights, not_vary)
         
-        solver_factory = pyo.SolverFactory('cplex', executable=solver_path)
+        # solver_factory = pyo.SolverFactory('cplex', executable=solver_path)
+        solver_factory = pyo.SolverFactory('mindtpy')
         # solver_factory.set_options("timeLimit=60")
-        solver_factory.options["timelimit"] = 120
+        # solver_factory.options["timelimit"] = 120
         # solver_factory.options["emphasis_mip"] = 2
 
-        pyo_solution = solver_factory.solve(self.pyo_model, tee=verbose)
+        # pyo_solution = solver_factory.solve(self.pyo_model, tee=verbose)
+        pyo_solution = solver_factory.solve(self.pyo_model, tee=verbose, time_limit=120, mip_solver="cplex", nlp_solver="ipopt")
         
         # Convert the dictionary to a list of values
         cf = list(self.pyo_model.nn.inputs.get_values().values())
