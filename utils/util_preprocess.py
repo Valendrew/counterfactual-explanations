@@ -505,3 +505,4 @@ def extract_prices_rate(curr, ser):
 
     print(f"Number of prices: {len(prices_ext)}")
     return prices_ext, conversion_rate
+
