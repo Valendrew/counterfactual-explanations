@@ -258,7 +258,7 @@ def compute_obj1_new(pyo_model, cf_class, num_classes):
     return sum([pyo_model.obj1_max_val[i] for i in range(0, num_classes - 1)])
 
 
-def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
+def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, sample):
     """
     It creates the sum value for the categorical features of the second
     objective function.
@@ -277,29 +277,36 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, sample):
     # Set of indexes for the features
     feat_set = pyo.Set(initialize=range(0, len(idx_cat)))
 
-    pyo_model.b_o2 = pyo.Var(feat_set, domain=pyo.Binary)
-    pyo_model.diff_o2 = pyo.Var(feat_set, domain=pyo.Integers)
+    pyo_model.b_o2 = pyo.Var(feat_set, domain=pyo.Binary, initialize=0)
+    pyo_model.diff_o2 = pyo.Var(feat_set, domain=pyo.NonNegativeReals)
+    pyo_model.sum_o2 = pyo.Var(domain=pyo.Reals, bounds=(0, len(idx_cat)), initialize=0)
+
     pyo_model.constr_less_o2 = pyo.Constraint(feat_set)
     pyo_model.constr_great_o2 = pyo.Constraint(feat_set)
+    pyo_model.constr_diff_o2 = pyo.Constraint(feat_set)
+    pyo_model.constr_sum_o2 = pyo.Constraint()
 
     cat_dist = 0
     for i, idx in enumerate(idx_cat):
         range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
 
-        pyo_model.diff_o2[i] = (sample[idx] - pyo_model.nn.inputs[idx]) ** 2
+        pyo_model.constr_diff_o2[i] = pyo_model.diff_o2[i] == (sample[idx] - pyo_model.nn.inputs[idx]) ** 2
 
         pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= pyo_model.b_o2[i]
         # pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
         # Add a +1 at the end because pyomo needs <= and not <
         pyo_model.constr_great_o2[i] = (
-            pyo_model.diff_o2[i] <= (pyo_model.b_o2[i] * range_i) + 1
+            pyo_model.diff_o2[i] <= (pyo_model.b_o2[i] * (range_i)) + 1-1e-5
         )
-        cat_dist += pyo_model.b_o2[i]
+        # cat_dist += pyo_model.b_o2[i] * cat_weights[i]
 
-    return cat_dist
+    pyo_model.constr_sum_o2 = pyo_model.sum_o2 == sum([pyo_model.b_o2[i] * cat_weights[i] for i in range(len(idx_cat))])
+    return pyo_model.sum_o2
 
 
-def gower_distance(x, cat, cont, pyo_model, feat_info, bounds):
+def gower_distance(
+    x, idx_cat, idx_cont, cat_weights, cont_weights, pyo_model, feat_info, bounds
+):
     """
     It computes the Gower distance.
 
@@ -307,9 +314,9 @@ def gower_distance(x, cat, cont, pyo_model, feat_info, bounds):
         - x: np.ndarray
             The array of features of the original sample.
         - cat: list[int]
-            The indexes of the categorical features.
+            The indexes of the categorical features in the DataFrame columns.
         - num: list[int]
-            The indexes of the continuous features.
+            The indexes of the continuous features in the DataFrame columns.
         - ranges: np.ndarray
             The list of ranges for the continuous features.
         - feat_info: dict
@@ -318,14 +325,40 @@ def gower_distance(x, cat, cont, pyo_model, feat_info, bounds):
     """
     features_constraints(pyo_model, feat_info)
 
-    num_dist = 0
-    for idx in cont:
-        range_i = bounds[1][idx] - bounds[0][idx]
-        num_dist += (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2)
+    # If the weights are not specified, we set them to 1
+    if len(cat_weights) == 0:
+        cat_weights = [1] * len(idx_cat)
+    if len(cont_weights) == 0:
+        cont_weights = [1] * len(idx_cont)
+    
+    for type_feat, type_weight in zip([idx_cat, idx_cont], [cat_weights, cont_weights]):
+        if len(type_weight) != len(type_feat):
+            raise ValueError(
+                "The number of weights is not equal to the number of features."
+            )
 
-    cat_dist = create_cat_constraints_obj_2(pyo_model, bounds, cat, x)
+    cont_bounds, cont_dist = 0, 0
+    cat_bounds, cat_dist = 0, 0
+    for i, idx in enumerate(idx_cont):
+        range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
+        cont_bounds += range_i
+        cont_dist += (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cont_weights[i]
 
-    return (cat_dist + num_dist) / len(x)
+    for i, idx in enumerate(idx_cat):
+        range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
+        cat_bounds += range_i
+        cat_dist += (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cat_weights[i]
+
+    pyo_model.obj2_cont_sum = pyo.Var(domain=pyo.Reals, bounds=(0, cont_bounds), initialize=0)
+    pyo_model.obj2_cont_sum_constr = pyo.Constraint(expr=pyo_model.obj2_cont_sum == cont_dist)
+
+    pyo_model.obj2_cat_sum = pyo.Var(domain=pyo.Reals, bounds=(0, cat_bounds), initialize=0)
+    pyo_model.obj2_cat_sum_constr = pyo.Constraint(expr=pyo_model.obj2_cat_sum == cat_dist)
+
+    # cat_dist = create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, x)
+
+    return (pyo_model.obj2_cat_sum + pyo_model.obj2_cont_sum) / len(x)
+    # return (pyo_model.sum_o2 + pyo_model.obj2_cont_sum) / len(x)
 
 
 def compute_obj_3(pyo_model, bounds, sample):
@@ -599,6 +632,8 @@ class OmltCounterfactual:
         cf_class: int,
         min_probability: float,
         objective_weights=[1, 1, 1],
+        cat_weights=[],
+        cont_weights=[],
         fixed_features=[],
     ):
         """It computes the objective functions to optimize to generate the counterfactuals.
@@ -617,8 +652,8 @@ class OmltCounterfactual:
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
-            # obj_1 = 0
-            raise Exception("Objective 1 must be computed.")
+            obj_1 = 0
+            # raise Exception("Objective 1 must be computed.")
         else:
             obj_1 = compute_obj_1_marginal_softmax(
                 self.pyo_model, cf_class, self.num_classes, min_probability
@@ -641,7 +676,14 @@ class OmltCounterfactual:
             gower_dist = 1
         else:
             gower_dist = gower_distance(
-                sample, idx_cat, idx_cont, self.pyo_model, self.feat_info, bounds=bounds
+                sample,
+                idx_cat,
+                idx_cont,
+                cat_weights,
+                cont_weights,
+                self.pyo_model,
+                self.feat_info,
+                bounds,
             )
 
         # OBJECTIVE 3
@@ -671,11 +713,13 @@ class OmltCounterfactual:
         cf_class: int,
         min_probability: float,
         obj_weights=[1, 1, 1],
+        cont_weights=[],
+        cat_weights=[],
         fixed_features=[],
         solver_options={},
         verbose=True,
     ) -> pd.DataFrame:
-        """ It generates the counterfactuals for a given sample.
+        """It generates the counterfactuals for a given sample.
 
         Args:
             sample (np.ndarray): sample to generate the counterfactual.
@@ -688,12 +732,18 @@ class OmltCounterfactual:
 
         Returns:
             pd.DataFrame: dataframe with the counterfactual sample.
-        """        
+        """
         # Reset the pyomo model
         self.__build_model()
         # Set the objective function
         self.__compute_objectives(
-            sample, cf_class, min_probability, obj_weights, fixed_features
+            sample,
+            cf_class,
+            min_probability,
+            obj_weights,
+            cont_weights,
+            cat_weights,
+            fixed_features,
         )
 
         # Set the solver to mindtpy
@@ -703,7 +753,6 @@ class OmltCounterfactual:
         for key, value in solver_options.items():
             # solver_factory.options[key] = value
             pass
-
 
         # The mindtpy solver has different options for the mip and nlp solver
         pyo_solution = solver_factory.solve(
@@ -716,7 +765,9 @@ class OmltCounterfactual:
 
         # Convert the pyomo solution to a dataframe
         counterfactual_sample = list(self.pyo_model.nn.inputs.get_values().values())
-        return pd.DataFrame(np.array(counterfactual_sample, ndmin=2), columns=self.X.columns)
+        return pd.DataFrame(
+            np.array(counterfactual_sample, ndmin=2), columns=self.X.columns
+        )
 
 
 class DiceCounterfactual:
