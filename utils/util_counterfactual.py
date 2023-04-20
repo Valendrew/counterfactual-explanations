@@ -290,17 +290,21 @@ def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, sample
     for i, idx in enumerate(idx_cat):
         range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
 
-        pyo_model.constr_diff_o2[i] = pyo_model.diff_o2[i] == (sample[idx] - pyo_model.nn.inputs[idx]) ** 2
+        pyo_model.constr_diff_o2[i] = (
+            pyo_model.diff_o2[i] == (sample[idx] - pyo_model.nn.inputs[idx]) ** 2
+        )
 
         pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= pyo_model.b_o2[i]
         # pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
         # Add a +1 at the end because pyomo needs <= and not <
         pyo_model.constr_great_o2[i] = (
-            pyo_model.diff_o2[i] <= (pyo_model.b_o2[i] * (range_i)) + 1-1e-5
+            pyo_model.diff_o2[i] <= (pyo_model.b_o2[i] * (range_i)) + 1 - 1e-5
         )
         # cat_dist += pyo_model.b_o2[i] * cat_weights[i]
 
-    pyo_model.constr_sum_o2 = pyo_model.sum_o2 == sum([pyo_model.b_o2[i] * cat_weights[i] for i in range(len(idx_cat))])
+    pyo_model.constr_sum_o2 = pyo_model.sum_o2 == sum(
+        [pyo_model.b_o2[i] * cat_weights[i] for i in range(len(idx_cat))]
+    )
     return pyo_model.sum_o2
 
 
@@ -323,14 +327,12 @@ def gower_distance(
             It contains the information about the features to set the bounds
             and domain for each one.
     """
-    features_constraints(pyo_model, feat_info)
-
     # If the weights are not specified, we set them to 1
     if len(cat_weights) == 0:
         cat_weights = [1] * len(idx_cat)
     if len(cont_weights) == 0:
         cont_weights = [1] * len(idx_cont)
-    
+
     for type_feat, type_weight in zip([idx_cat, idx_cont], [cat_weights, cont_weights]):
         if len(type_weight) != len(type_feat):
             raise ValueError(
@@ -339,21 +341,35 @@ def gower_distance(
 
     cont_bounds, cont_dist = 0, 0
     cat_bounds, cat_dist = 0, 0
+    # Compute the sum of the bounds for the continuous features
     for i, idx in enumerate(idx_cont):
         range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
         cont_bounds += range_i
-        cont_dist += (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cont_weights[i]
+        cont_dist += (
+            (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cont_weights[i]
+        )
 
+    # Compute the sum of the bounds for the categorical features
     for i, idx in enumerate(idx_cat):
         range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
         cat_bounds += range_i
-        cat_dist += (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cat_weights[i]
+        cat_dist += (
+            (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cat_weights[i]
+        )
 
-    pyo_model.obj2_cont_sum = pyo.Var(domain=pyo.Reals, bounds=(0, cont_bounds), initialize=0)
-    pyo_model.obj2_cont_sum_constr = pyo.Constraint(expr=pyo_model.obj2_cont_sum == cont_dist)
+    pyo_model.obj2_cont_sum = pyo.Var(
+        domain=pyo.Reals, bounds=(0, cont_bounds), initialize=0
+    )
+    pyo_model.obj2_cont_sum_constr = pyo.Constraint(
+        expr=pyo_model.obj2_cont_sum == cont_dist
+    )
 
-    pyo_model.obj2_cat_sum = pyo.Var(domain=pyo.Reals, bounds=(0, cat_bounds), initialize=0)
-    pyo_model.obj2_cat_sum_constr = pyo.Constraint(expr=pyo_model.obj2_cat_sum == cat_dist)
+    pyo_model.obj2_cat_sum = pyo.Var(
+        domain=pyo.Reals, bounds=(0, cat_bounds), initialize=0
+    )
+    pyo_model.obj2_cat_sum_constr = pyo.Constraint(
+        expr=pyo_model.obj2_cat_sum == cat_dist
+    )
 
     # cat_dist = create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, x)
 
@@ -481,26 +497,11 @@ def create_feature_pyomo_info(
     features_info = {}
 
     # Check the bounds passed as parameters are valid
-    def check_bounds(bounds, feat: list, name: str) -> pd.DataFrame:
-        if bounds == "min-max":
-            bound_min = X[feat].min().values.reshape(-1, 1)
-            bound_max = X[feat].max().values.reshape(-1, 1)
-        elif len(feat) > 0 and bounds is None:
-            raise (Exception, f"Bounds {name} must be specified.")
-        elif isinstance(bounds, tuple) and len(bounds) != 2:
-            raise (Exception, f"Bounds {name} must be a tuple of length 2.")
-        else:
-            # bounds = np.array(bounds).reshape(1, -1)
-            bound_min = np.repeat(bounds[0], len(feat)).reshape(-1, 1)
-            bound_max = np.repeat(bounds[1], len(feat)).reshape(-1, 1)
-
-        bounds = np.concatenate((bound_min, bound_max), axis=1)
-        bounds = pd.DataFrame(bounds, index=feat)
-        return bounds
-
-    continuous_bounds = check_bounds(continuous_bounds, continuous_feat, "continuous")
+    continuous_bounds = check_bounds(
+        X, continuous_bounds, continuous_feat, "continuous"
+    )
     categorical_bounds = check_bounds(
-        categorical_bounds, categorical_feat, "categorical"
+        X, categorical_bounds, categorical_feat, "categorical"
     )
 
     for i, col in enumerate(X.columns.tolist()):
@@ -523,6 +524,44 @@ def create_feature_pyomo_info(
     return features_info
 
 
+def check_bounds(X: pd.DataFrame, bounds, feat: list, name: str) -> pd.DataFrame:
+    """It checks if the bounds passed as parameters are valid. The supported
+    bounds are "min-max" and a tuple of length 2. The min-max bounds are
+    computed using the min and max values of the features in X, while the
+    tuple of length 2 is used to specify the bounds manually. If the bounds
+    are not in the supported ones, an exception is raised.
+
+    Args:
+        X (pd.DataFrame): Dataframe containing the features.
+        bounds (str, tuple): Bounds to use for the features.
+        feat (list): List of the features.
+        name (str): Name of the category the features belong to.
+
+    Returns:
+        pd.DataFrame: Dataframe containing the bounds for the features.
+    """
+    if bounds == "min-max":
+        bound_min = X[feat].min().values.reshape(-1, 1)
+        bound_max = X[feat].max().values.reshape(-1, 1)
+    elif len(feat) > 0 and bounds is None:
+        raise (Exception, f"Bounds {name} must be specified.")
+    elif isinstance(bounds, tuple) and len(bounds) != 2:
+        raise (Exception, f"Bounds {name} must be a tuple of length 2.")
+    else:
+        # bounds = np.array(bounds).reshape(1, -1)
+        bound_min = np.repeat(bounds[0], len(feat)).reshape(-1, 1)
+        bound_max = np.repeat(bounds[1], len(feat)).reshape(-1, 1)
+
+        if np.any(bound_min < X[feat].min().values):
+            print(f"WARNING: {name} lower bound is out of range for some features")
+        if np.any(bound_max > X[feat].max().values):
+            print(f"WARNING: {name} upper bound is out of range for some features")
+
+    bounds = np.concatenate((bound_min, bound_max), axis=1)
+    bounds = pd.DataFrame(bounds, index=feat)
+    return bounds
+
+
 class OmltCounterfactual:
     def __init__(
         self,
@@ -530,20 +569,24 @@ class OmltCounterfactual:
         y: pd.Series,
         nn_model,
         continuous_feat=[],
+        continuous_bounds=(-1, 1),
+        categorical_bounds="min-max",
     ):
         """
         It is the class used to generate counterfactuals with OMLT.
 
-        Parameters:
-            - X_test: pd.DataFrame
+        Args:
+            - X: pd.DataFrame
                 The dataframe that contains the X data.
-            - y_test: pd.Series
+            - y: pd.Series
                 The series that contains the correct class for the data. The number of
                 classes is inferred from this series.
             - nn_model:
                 The pytorch neural network that the class will use for the
                 counterfactual generation.
             - continuous_feat: (list, optional): list of the continuous features. Defaults to [].
+            - continuous_bounds (str, tuple, optional): Bounds to use for the continuous features. Defaults to (-1, 1).
+            - categorical_bounds (str, tuple, optional): Bounds to use for the categorical features. Defaults to "min-max".
         """
         self.X = X
         self.y = y
@@ -559,8 +602,8 @@ class OmltCounterfactual:
             self.X,
             self.continuous_feat,
             self.categorical_feat,
-            continuous_bounds=(-1, 1),
-            categorical_bounds="min-max",
+            continuous_bounds=continuous_bounds,
+            categorical_bounds=categorical_bounds,
         )
 
         # Check if the solvers are available in the system
@@ -650,9 +693,12 @@ class OmltCounterfactual:
             len(objective_weights) == self.SUPPORTED_OBJECTIVES
         ), "The number of objectives is not correct."
 
+        features_constraints(self.pyo_model, self.feat_info)
+
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
             obj_1 = 0
+            # TODO uncomment this
             # raise Exception("Objective 1 must be computed.")
         else:
             obj_1 = compute_obj_1_marginal_softmax(
