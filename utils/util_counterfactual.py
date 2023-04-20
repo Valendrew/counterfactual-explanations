@@ -398,23 +398,30 @@ def compute_obj_3(pyo_model, bounds, sample):
     feat_set = pyo.Set(initialize=range(0, n_feat))
 
     pyo_model.b_o3 = pyo.Var(feat_set, domain=pyo.Binary)
+    pyo_model.sum_o3 = pyo.Var(domain=pyo.NonNegativeIntegers, bounds=(0, n_feat), initialize=0)
     pyo_model.diff_o3 = pyo.Var(feat_set, domain=pyo.Reals)
+
+    pyo_model.constr_diff_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_less_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_great_o3 = pyo.Constraint(feat_set)
+    pyo_model.constr_sum_o3 = pyo.Constraint()
+
 
     changed = 0
     for i in range(n_feat):
         range_i = (bounds[1][i] - bounds[0][i]) ** 2
-        pyo_model.diff_o3[i] = (sample[i] - pyo_model.nn.inputs[i]) ** 2
+        threshold = 1e-3
+        pyo_model.constr_diff_o3[i] = pyo_model.diff_o3[i] == (sample[i] - pyo_model.nn.inputs[i]) ** 2
 
-        pyo_model.constr_less_o3[i] = pyo_model.diff_o3[i] >= pyo_model.b_o3[i]
+        pyo_model.constr_less_o3[i] = pyo_model.diff_o3[i] >= pyo_model.b_o3[i] - 1 + threshold
         # Add a +1 at the end because pyomo needs <= and not <
         pyo_model.constr_great_o3[i] = (
-            pyo_model.diff_o3[i] <= (pyo_model.b_o3[i] * range_i) + 1
+            pyo_model.diff_o3[i] <= (pyo_model.b_o3[i] * range_i) 
         )
-        changed += pyo_model.b_o3[i]
-
-    return changed
+    pyo_model.constr_sum_o3 = pyo_model.sum_o3 == sum(
+        [pyo_model.b_o3[i] for i in range(n_feat)]
+    )
+    return pyo_model.sum_o3
 
 
 def limit_counterfactual(pyo_model, sample, features, pyo_info):
