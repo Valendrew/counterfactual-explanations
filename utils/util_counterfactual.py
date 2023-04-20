@@ -24,8 +24,7 @@ import dice_ml
 # Functions to compute the OMLT objectives
 ##############################################
 
-
-def my_softmax(input, n_class, real_class):
+def handmade_softmax(input, n_class, real_class):
     """
     It returns the probability of the desired class after having computed the
     softmax for the input array.
@@ -53,25 +52,27 @@ def features_constraints(pyo_model, feat_info):
         pyo_model.nn.inputs[idx].bounds = bounds
 
 
-def compute_obj_1(pyo_model, cf_class, min_logit=2):
+def compute_obj_1(pyo_model, cf_class, num_classes=3, min_logit=2):
     """
     It creates the objective function to minimize the distance between the
     predicted and the desired class.
-
+    
     Parameters:
-        - pyo_model:
-            The pyomo model to consider.
-        - cf_class: int
-            The class that the counterfactual should have after the generation.
-        - num_classes: int
-            The number of classes of the task.
-        - range_prob: float
-            An accepted value for the probability of the predicted class.
-
+    -----------
+    pyo_model:
+        The pyomo model where the variables and constraints will be added.
+    cf_class: int
+        The class that the counterfactual should have after the generation.
+    num_classes: int
+        The number of classes of the task.
+    min_logit: float
+        An accepted value for the logit value of the predicted class.
+    
     Returns:
+    --------
         It returns the pyomo variable that contains the value to optimize.
     """
-    # prob_y = lambda x: my_softmax(x, num_classes, cf_class)
+    # prob_y = lambda x: handmade_softmax(x, num_classes, cf_class)
 
     # something
     pyo_model.obj1_q_relu = pyo.Var(within=pyo.Binary, initialize=0)
@@ -96,11 +97,10 @@ def compute_obj_1(pyo_model, cf_class, min_logit=2):
         within=pyo.NonNegativeReals, bounds=(0, u), initialize=0
     )
 
-    # constrains the difference of the probabilities
+    # constrains the difference of the probabilities (logits)
     pyo_model.obj1_diff_prob_constr = pyo.Constraint(
         expr=pyo_model.obj1_diff_prob == min_logit - pyo_model.nn.outputs[cf_class]
     )
-    # pyo_model.obj1_diff_prob == min_probability - pyo_model.nn.outputs[cf_class]
 
     pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
     pyo_model.obj1_z_lower_bound_zhat_relu = (
@@ -121,7 +121,26 @@ def compute_obj_1(pyo_model, cf_class, min_logit=2):
 def compute_obj_1_marginal_softmax(
     pyo_model, cf_class: int, num_classes: int, min_probability: float
 ):
-    # prob_y = lambda x: my_softmax(x, num_classes, cf_class)
+    """
+    It creates the objective function to minimize the distance between the
+    predicted and the desired class, using the marginal softmax.
+    
+    Parameters:
+    -----------
+    pyo_model:
+        The pyomo model to consider.
+    cf_class: int
+        The class that the counterfactual should have after the generation.
+    num_classes: int
+        The number of classes of the task.
+    min_probability: float
+        An accepted value for the probability of the predicted class.
+    
+    Returns:
+    --------
+        It returns the pyomo variable that contains the value to optimize.
+    """
+    # prob_y = lambda x: handmade_softmax(x, num_classes, cf_class)
 
     # something
     pyo_model.obj1_q_relu = pyo.Var(within=pyo.Binary, initialize=0)
@@ -140,19 +159,15 @@ def compute_obj_1_marginal_softmax(
 
     # define difference of the output
     pyo_model.obj1_diff_prob = pyo.Var(within=pyo.Reals, bounds=(l, u), initialize=0)
-
     # define variable for max(0, output)
     pyo_model.obj1_max_val = pyo.Var(
         within=pyo.NonNegativeReals, bounds=(0, u), initialize=0
     )
-
     # define variable for marginal softmax
     pyo_model.obj1_marginal_softmax = pyo.Var(bounds=(l, u), initialize=0)
 
-    # constraints the marginal softmax
+    # Constraints the marginal softmax
     def softmax_constr_rule(m):
-        # vals = [math.e ** m.nn.outputs[i] for i in range(max_classes)]
-        # return m.obj1_marginal_softmax == pyo.log(vals[0] + vals[1] + vals[2]) - m.nn.outputs[cf_class]
         return (
             m.obj1_marginal_softmax
             == pyo.log(sum([pyo.exp(m.nn.outputs[i]) for i in range(num_classes)]))
@@ -162,13 +177,11 @@ def compute_obj_1_marginal_softmax(
     pyo_model.obj1_marginal_softmax_constr = pyo.Constraint(
         rule=softmax_constr_rule(pyo_model)
     )
-
     # constrains the difference of the probabilities
     pyo_model.obj1_diff_prob_constr = pyo.Constraint(
         expr=pyo_model.obj1_diff_prob
         == pyo_model.obj1_marginal_softmax - min_probability
     )
-    # pyo_model.obj1_diff_prob == min_probability - pyo_model.nn.outputs[cf_class]
 
     pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
     pyo_model.obj1_z_lower_bound_zhat_relu = (
@@ -186,146 +199,35 @@ def compute_obj_1_marginal_softmax(
     return pyo_model.obj1_max_val
 
 
-def compute_obj1_new(pyo_model, cf_class, num_classes):
-    """
-    It creates the objective function to minimize the distance between the
-    predicted and the desired class.
-
-    Parameters:
-        - pyo_model:
-            The pyomo model to consider.
-        - cf_class: int
-            The class that the counterfactual should have after the generation.
-        - num_classes: int
-            The number of classes of the task.
-        - range_prob: float
-            An accepted value for the probability of the predicted class.
-
-    Returns:
-        It returns the pyomo variable that contains the value to optimize.
-    """
-    # set of classes
-    classes_set = pyo.Set(initialize=range(0, num_classes - 1))
-
-    pyo_model.obj1_q_relu = pyo.Var(classes_set, within=pyo.Binary, initialize=0)
-
-    # constraints
-    pyo_model.obj1_z_lower_bound_relu = pyo.Constraint(classes_set)
-    pyo_model.obj1_z_lower_bound_zhat_relu = pyo.Constraint(classes_set)
-    pyo_model.obj1_z_upper_bound_relu = pyo.Constraint(classes_set)
-    pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint(classes_set)
-
-    l, u = (-15, 15)
-
-    # set dummy parameters here to avoid warning message from Pyomo
-    pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
-    pyo_model.obj1_big_m_ub_relu = pyo.Param(default=u, mutable=False)
-
-    # define difference of the output
-    pyo_model.obj1_diff_prob = pyo.Var(
-        classes_set, within=pyo.Reals, bounds=(l, u), initialize=0
-    )
-    # define variable for max(0, output)
-    pyo_model.obj1_max_val = pyo.Var(
-        classes_set, within=pyo.NonNegativeReals, bounds=(0, u), initialize=0
-    )
-
-    # constrains the difference of the probabilities
-    pyo_model.obj1_diff_prob_constr = pyo.Constraint(classes_set)
-
-    available_classes = list(set(range(0, num_classes)) - set([cf_class]))
-    threshold = 0.5
-    for i, idx in enumerate(available_classes):
-        pyo_model.obj1_diff_prob_constr[i] = (
-            pyo_model.obj1_diff_prob[i]
-            == pyo_model.nn.outputs[cf_class] - pyo_model.nn.outputs[idx] + threshold
-        )
-
-        pyo_model.obj1_z_lower_bound_relu[i] = pyo_model.obj1_max_val[i] >= 0
-        pyo_model.obj1_z_lower_bound_zhat_relu[i] = (
-            pyo_model.obj1_max_val[i] >= pyo_model.obj1_diff_prob[i]
-        )
-        pyo_model.obj1_z_upper_bound_relu[i] = (
-            pyo_model.obj1_max_val[i]
-            <= pyo_model.obj1_big_m_ub_relu * pyo_model.obj1_q_relu[i]
-        )
-        pyo_model.obj1_z_upper_bound_zhat_relu[i] = pyo_model.obj1_max_val[
-            i
-        ] <= pyo_model.obj1_diff_prob[i] - pyo_model.obj1_big_m_lb_relu * (
-            1.0 - pyo_model.obj1_q_relu[i]
-        )
-
-    return sum([pyo_model.obj1_max_val[i] for i in range(0, num_classes - 1)])
-
-
-def create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, sample):
-    """
-    It creates the sum value for the categorical features of the second
-    objective function.
-
-    Parameters:
-        - pyo_model
-            The model in which the variables and the constraints will be added.
-        - bounds: tuple(int)
-            The lower and upper value for the constraints.
-        - idx_cat: list[int]
-            The indexes of the categorical features that we need to compare.
-        - sample: np.ndarray
-            The values of the original sample for which the counterfactual is
-            generated.
-    """
-    # Set of indexes for the features
-    feat_set = pyo.Set(initialize=range(0, len(idx_cat)))
-
-    pyo_model.b_o2 = pyo.Var(feat_set, domain=pyo.Binary, initialize=0)
-    pyo_model.diff_o2 = pyo.Var(feat_set, domain=pyo.NonNegativeReals)
-    pyo_model.sum_o2 = pyo.Var(domain=pyo.Reals, bounds=(0, len(idx_cat)), initialize=0)
-
-    pyo_model.constr_less_o2 = pyo.Constraint(feat_set)
-    pyo_model.constr_great_o2 = pyo.Constraint(feat_set)
-    pyo_model.constr_diff_o2 = pyo.Constraint(feat_set)
-    pyo_model.constr_sum_o2 = pyo.Constraint()
-
-    cat_dist = 0
-    for i, idx in enumerate(idx_cat):
-        range_i = (bounds[1][idx] - bounds[0][idx]) ** 2
-
-        pyo_model.constr_diff_o2[i] = (
-            pyo_model.diff_o2[i] == (sample[idx] - pyo_model.nn.inputs[idx]) ** 2
-        )
-
-        pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= pyo_model.b_o2[i]
-        # pyo_model.constr_less_o2[i] = pyo_model.diff_o2[i] >= (pyo_model.b_o2[i]*(-L+1))+L
-        # Add a +1 at the end because pyomo needs <= and not <
-        pyo_model.constr_great_o2[i] = (
-            pyo_model.diff_o2[i] <= (pyo_model.b_o2[i] * (range_i)) + 1 - 1e-5
-        )
-        # cat_dist += pyo_model.b_o2[i] * cat_weights[i]
-
-    pyo_model.constr_sum_o2 = pyo_model.sum_o2 == sum(
-        [pyo_model.b_o2[i] * cat_weights[i] for i in range(len(idx_cat))]
-    )
-    return pyo_model.sum_o2
-
-
 def gower_distance(
-    x, idx_cat, idx_cont, cat_weights, cont_weights, pyo_model, feat_info, bounds
+    x, idx_cat, idx_cont, cat_weights, cont_weights, pyo_model, bounds
 ):
     """
-    It computes the Gower distance.
-
+    It computes an adapted version of the Gower distance. In this case the
+    function will also compute the distance between the categorical features
+    in the same way the original formula computes the distance between 
+    numerical ones.
+    
     Parameters:
-        - x: np.ndarray
-            The array of features of the original sample.
-        - cat: list[int]
-            The indexes of the categorical features in the DataFrame columns.
-        - num: list[int]
-            The indexes of the continuous features in the DataFrame columns.
-        - ranges: np.ndarray
-            The list of ranges for the continuous features.
-        - feat_info: dict
-            It contains the information about the features to set the bounds
-            and domain for each one.
+    -----------
+    x: np.ndarray
+        The array of features of the original sample.
+    idx_cat: list[int]
+        The indexes of the categorical features in the DataFrame columns.
+    idx_cont: list[int]
+        The indexes of the continuous features in the DataFrame columns.
+    cat_weights: list[float]
+        The list of weights to consider for the features.
+    cont_weights: list[float]
+        The list of weights to consider for the continuous features.
+    pyo_model:
+        The pyomo model where the variables and constraints will be added.
+    bounds: tuple(pd.Series, pd.Series)
+        The series of minimum and maximum values for each feature.
+    
+    Returns
+    -------
+    It returns the pyomo variable that contains the sum to minimize. 
     """
     # If the weights are not specified, we set them to 1
     if len(cat_weights) == 0:
@@ -356,14 +258,14 @@ def gower_distance(
         cat_dist += (
             (1 / range_i) * ((x[idx] - pyo_model.nn.inputs[idx]) ** 2) * cat_weights[i]
         )
-
+    # Continuous feature variables and constraints
     pyo_model.obj2_cont_sum = pyo.Var(
         domain=pyo.Reals, bounds=(0, cont_bounds), initialize=0
     )
     pyo_model.obj2_cont_sum_constr = pyo.Constraint(
         expr=pyo_model.obj2_cont_sum == cont_dist
     )
-
+    # Categorical feature variables and constraints
     pyo_model.obj2_cat_sum = pyo.Var(
         domain=pyo.Reals, bounds=(0, cat_bounds), initialize=0
     )
@@ -371,10 +273,7 @@ def gower_distance(
         expr=pyo_model.obj2_cat_sum == cat_dist
     )
 
-    # cat_dist = create_cat_constraints_obj_2(pyo_model, bounds, idx_cat, cat_weights, x)
-
     return (pyo_model.obj2_cat_sum + pyo_model.obj2_cont_sum) / len(x)
-    # return (pyo_model.sum_o2 + pyo_model.obj2_cont_sum) / len(x)
 
 
 def compute_obj_3(pyo_model, bounds, sample):
@@ -383,38 +282,37 @@ def compute_obj_3(pyo_model, bounds, sample):
     changed during counterfactual.
 
     Parameters:
-        - pyo_model
-            The model in which the variables and the constraints will be added.
-        - bounds: tuple[int]
-            The bounds to use for the constraints.
-        - n_feat: int
-            The number of features of the sample.
-        - sample: np.ndarray
-            The original sample for which the counterfactual is created.
+    -----------
+    pyo_model
+        The model in which the variables and the constraints will be added.
+    bounds: tuple[pd.Series, pd.Series]
+        The minimum and maximum values for each feature.
+    sample: np.ndarray
+        The original sample for which the counterfactual is created.
+    
+    Returns:
+    --------
+    It returns the pyomo variable that represents the number of changed variables.
     """
-    # L, U = bounds
     n_feat = len(sample)
     # Set of indexes for the features
     feat_set = pyo.Set(initialize=range(0, n_feat))
-
+    # Variables to handle the values 
     pyo_model.b_o3 = pyo.Var(feat_set, domain=pyo.Binary)
     pyo_model.sum_o3 = pyo.Var(domain=pyo.NonNegativeIntegers, bounds=(0, n_feat), initialize=0)
     pyo_model.diff_o3 = pyo.Var(feat_set, domain=pyo.Reals)
-
+    # Constraints for the if then else
     pyo_model.constr_diff_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_less_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_great_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_sum_o3 = pyo.Constraint()
 
-
-    changed = 0
     for i in range(n_feat):
         range_i = (bounds[1][i] - bounds[0][i]) ** 2
         threshold = 1e-3
         pyo_model.constr_diff_o3[i] = pyo_model.diff_o3[i] == (sample[i] - pyo_model.nn.inputs[i]) ** 2
-
+    
         pyo_model.constr_less_o3[i] = pyo_model.diff_o3[i] >= pyo_model.b_o3[i] - 1 + threshold
-        # Add a +1 at the end because pyomo needs <= and not <
         pyo_model.constr_great_o3[i] = (
             pyo_model.diff_o3[i] <= (pyo_model.b_o3[i] * range_i) 
         )
@@ -428,16 +326,17 @@ def limit_counterfactual(pyo_model, sample, features, pyo_info):
     """
     It sets some constraints to avoid the change of some features during
     counterfactual generation.
-
+    
     Parameters:
-        - pyo_model:
-            The pyomo model to consider.
-        - sample: np.ndarray
-            The sample for which a counterfactual is generated.
-        - features: list[str]
-            The features that the model must not change.
-        - pyo_info: dict
-            The dictionary that contains information about the features.
+    -----------
+    pyo_model:
+        The pyomo model to consider.
+    sample: np.ndarray
+        The sample for which a counterfactual is generated.
+    features: list[str]
+        The features that the model must not change.
+    pyo_info: dict
+        The dictionary that contains information about the features.
 
     """
     if features is None or len(features) < 1:
@@ -459,7 +358,6 @@ def limit_counterfactual(pyo_model, sample, features, pyo_info):
 # Functions for generic usage
 ################################
 
-
 def get_counterfactual_class(initial_class, num_classes, lower=True):
     """
     It returns the counterfactual class given the initial class, the number
@@ -480,7 +378,7 @@ def get_counterfactual_class(initial_class, num_classes, lower=True):
         return initial_class - counterfactual_op
     return initial_class + counterfactual_op
 
-
+np.max(9)
 def create_feature_pyomo_info(
     X: pd.DataFrame,
     continuous_feat: list,
@@ -488,18 +386,27 @@ def create_feature_pyomo_info(
     continuous_bounds=None,
     categorical_bounds=None,
 ):
-    """It creates a dictionary that contains, for each feature in X:
+    """
+    It creates a dictionary that contains, for each feature in X:
     the domain, the bounds and the column index of the feature in the dataframe.
 
-    Args:
-        X (pd.DataFrame): Dataframe containing the features.
-        continuous_feat (list): list of the continuous features.
-        categorical_feat (list): list of the categorical features.
-        continuous_bounds (str, tuple, optional): Bounds to use for the continuous features. Defaults to None.
-        categorical_bounds (str, tuple, optional): Bounds to use for the categorical features. Defaults to None.
+    Parameters:
+    -----------
+    X: pd.DataFrame
+        Dataframe containing the features.
+    continuous_feat: list
+        List of the continuous features.
+    categorical_feat: list
+        List of the categorical features.
+    continuous_bounds: str or tuple, optional
+        Bounds to use for the continuous features. Defaults to None.
+    categorical_bounds: str or tuple, optional
+        Bounds to use for the categorical features. Defaults to None.
 
     Returns:
-        dict: Dictionary containing the information about the features.
+    --------
+    dict: 
+        Dictionary containing the information about the features.
     """
     features_info = {}
 
@@ -532,20 +439,28 @@ def create_feature_pyomo_info(
 
 
 def check_bounds(X: pd.DataFrame, bounds, feat: list, name: str) -> pd.DataFrame:
-    """It checks if the bounds passed as parameters are valid. The supported
+    """
+    It checks if the bounds passed as parameters are valid. The supported
     bounds are "min-max" and a tuple of length 2. The min-max bounds are
     computed using the min and max values of the features in X, while the
     tuple of length 2 is used to specify the bounds manually. If the bounds
     are not in the supported ones, an exception is raised.
 
-    Args:
-        X (pd.DataFrame): Dataframe containing the features.
-        bounds (str, tuple): Bounds to use for the features.
-        feat (list): List of the features.
-        name (str): Name of the category the features belong to.
+    Parameters:
+    -----------
+    X: pd.DataFrame
+        Dataframe containing the features.
+    bounds: str or tuple
+        Bounds to use for the features.
+    feat: list
+        List of the features.
+    name: str
+        Name of the category the features belong to.
 
     Returns:
-        pd.DataFrame: Dataframe containing the bounds for the features.
+    --------
+    pd.DataFrame: 
+        Dataframe containing the bounds for the features.
     """
     if bounds == "min-max":
         bound_min = X[feat].min().values.reshape(-1, 1)
@@ -582,18 +497,22 @@ class OmltCounterfactual:
         """
         It is the class used to generate counterfactuals with OMLT.
 
-        Args:
-            - X: pd.DataFrame
-                The dataframe that contains the X data.
-            - y: pd.Series
-                The series that contains the correct class for the data. The number of
-                classes is inferred from this series.
-            - nn_model:
-                The pytorch neural network that the class will use for the
-                counterfactual generation.
-            - continuous_feat: (list, optional): list of the continuous features. Defaults to [].
-            - continuous_bounds (str, tuple, optional): Bounds to use for the continuous features. Defaults to (-1, 1).
-            - categorical_bounds (str, tuple, optional): Bounds to use for the categorical features. Defaults to "min-max".
+        Parameters:
+        -----------
+        X: pd.DataFrame
+            The dataframe that contains the X data.
+        y: pd.Series
+            The series that contains the correct class for the data. The number of
+            classes is inferred from this series.
+        nn_model:
+            The pytorch neural network that the class will use for the counterfactual 
+            generation.
+        continuous_feat: list, optional 
+            List of the continuous features. Defaults to [].
+        continuous_bounds: str or tuple, optional
+            Bounds to use for the continuous features. Defaults to (-1, 1).
+        categorical_bounds: str or tuple, optional
+            Bounds to use for the categorical features. Defaults to "min-max".
         """
         self.X = X
         self.y = y
@@ -618,23 +537,31 @@ class OmltCounterfactual:
         # Create the network formulation
         self.__create_network_formulation(-1, 1)
 
+
     def __check_available_solvers(self):
-        """It checks if the solvers that are used are available.
+        """
+        It checks if the solvers that are used are available.
 
         Raises:
-            Exception: If the solver is not available.
+        -------
+        Exception: If the solver is not available.
         """
         for solver in self.AVAILABLE_SOLVERS.values():
             if not pyo.SolverFactory(solver).available():
                 raise Exception("The solver {} is not available.".format(solver))
 
+
     def __create_network_formulation(self, lb: float, ub: float):
-        """It computes the formulation of the network first converting the model
+        """
+        It computes the formulation of the network first converting the model
         to an onnx model and then using pyomo.
 
-        Args:
-            lb (float): Lower bound for the input features.
-            ub (float): Upper bound for the input features.
+        Parameters:
+        -----------
+        lb: float
+            Lower bound for the input features.
+        ub: float
+            Upper bound for the input features.
         """
         # Create a dummy sample to export the model
         num_features = self.X.shape[1]
@@ -665,8 +592,10 @@ class OmltCounterfactual:
 
         self.formulation = FullSpaceNNFormulation(network_definition)
 
+
     def __build_model(self):
-        """It actually builds the formulation of the network to use the model to
+        """
+        It actually builds the formulation of the network to use the model to
         solve an optimization problem.
         """
         # Create a pyomo model
@@ -675,6 +604,7 @@ class OmltCounterfactual:
         # Create an OMLT block for the nn and build the formulation
         self.pyo_model.nn = OmltBlock()
         self.pyo_model.nn.build_formulation(self.formulation)
+
 
     def __compute_objectives(
         self,
@@ -686,36 +616,45 @@ class OmltCounterfactual:
         cont_weights=[],
         fixed_features=[],
     ):
-        """It computes the objective functions to optimize to generate the counterfactuals.
+        """
+        It computes the objective functions to optimize to generate the counterfactuals.
         For the parameters explanation check "generate_counterfactuals" function.
 
-        Args:
-            sample (np.ndarray): sample to generate the counterfactual.
-            cf_class (int): class of the counterfactual.
-            min_probability (float): minimum probability of the softmax output.
-            objective_weights (list, optional): weights of the objectives. Defaults to [1, 1, 1].
-            fixed_features (list, optional): list of features which are fixed. Defaults to [].
+        Parameters:
+        -----------
+        sample: np.ndarray
+            Sample to generate the counterfactual.
+        cf_class: int
+            Class of the counterfactual.
+        min_probability: float
+            Minimum probability of the softmax output.
+        objective_weights: list, optional
+            Weights of the objectives. Defaults to [1, 1, 1].
+        cat_weights: list, optional
+            The weights for the categorical features in the Gower distance.
+        cont_weights: list, optional
+            The weights for the continuous features in the Gower distance.
+        fixed_features: list, optional
+            List of features which are fixed. Defaults to [].
         """
         assert (
             len(objective_weights) == self.SUPPORTED_OBJECTIVES
         ), "The number of objectives is not correct."
 
+        # Set the domain and bounds for each feature of the counterfactual
         features_constraints(self.pyo_model, self.feat_info)
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
             obj_1 = 0
-            # TODO uncomment this
-            # raise Exception("Objective 1 must be computed.")
+            raise Exception("Objective 1 must be computed.")
         else:
             obj_1 = compute_obj_1_marginal_softmax(
                 self.pyo_model, cf_class, self.num_classes, min_probability
             )
-            # obj_1 = compute_obj1_new(self.pyo_model, cf_class, self.num_classes)
             # obj_1 = compute_obj_1(self.pyo_model, cf_class, self.num_classes, min_probability)
 
-        # OBJECTIVE 2
-        # Dataframes with continuous and categorical features
+        # OBJECTIVE 2 - generate counterfactual with limited distances from original features
         cont_df = self.X.loc[:, self.continuous_feat]
         cat_df = self.X.loc[:, self.categorical_feat]
 
@@ -735,21 +674,20 @@ class OmltCounterfactual:
                 cat_weights,
                 cont_weights,
                 self.pyo_model,
-                self.feat_info,
                 bounds,
             )
 
-        # OBJECTIVE 3
+        # OBJECTIVE 3 -  change the minimum number of features
         if objective_weights[2] == 0:
             obj_3 = 1
             print(
-                f"Objective 3 is set to 0, so the distance from the original sample will be 0"
+                f"Objective 3 is set to 0, so the number of changed features is not minimized."
             )
         else:
             obj_3 = compute_obj_3(self.pyo_model, bounds, sample)
 
         # Don't change some features
-        # limit_counterfactual(self.pyo_model, orig_sample, not_vary, self.feat_info)
+        limit_counterfactual(self.pyo_model, sample, fixed_features, self.feat_info)
 
         final_obj = (
             objective_weights[0] * obj_1
@@ -759,6 +697,7 @@ class OmltCounterfactual:
 
         # Set the objective function
         self.pyo_model.obj = pyo.Objective(expr=final_obj)
+
 
     def generate_counterfactuals(
         self,
@@ -772,19 +711,35 @@ class OmltCounterfactual:
         solver_options={},
         verbose=True,
     ) -> pd.DataFrame:
-        """It generates the counterfactuals for a given sample.
+        """
+        It generates the counterfactual for a given sample, considering the passed
+        parameters.
 
-        Args:
-            sample (np.ndarray): sample to generate the counterfactual.
-            cf_class (int): class of the counterfactual the sample should be classified as.
-            min_probability (float): minimum probability of the softmax output.
-            obj_weights (list, optional): weights of the objectives. Defaults to [1, 1, 1].
-            fixed_features (list, optional): list of features which are fixed. Defaults to [].
-            solver_options (dict, optional): options for the solver. Defaults to {}.
-            verbose (bool, optional): verbose mode for the solver. Defaults to True.
+        Parameters:
+        -----------
+        sample: np.ndarray
+            Sample to generate the counterfactual.
+        cf_class: int
+            Class of the counterfactual the sample should be classified as.
+        min_probability: float
+            Minimum probability of the softmax output.
+        obj_weights: list, optional
+            Weights of the objectives. Defaults to [1, 1, 1].
+        cont_weights: list, optional
+            The weights to consider for the continuous features in the Gower distance.
+        cat_weights: list, optional
+            The weights to consider for the categorical features in the Gower distance.
+        fixed_features: list, optional
+            List of features which are fixed. Defaults to [].
+        solver_options: dict, optional
+            Options for the solver. Defaults to {}.
+        verbose: bool, optional
+            Verbose mode for the solver. Defaults to True.
 
         Returns:
-            pd.DataFrame: dataframe with the counterfactual sample.
+        --------
+        pd.DataFrame: 
+            A dataframe with the counterfactual sample.
         """
         # Reset the pyomo model
         self.__build_model()
@@ -803,9 +758,9 @@ class OmltCounterfactual:
         solver_factory = pyo.SolverFactory("mindtpy")
 
         # Set the solver options. These options are used for all solvers except mindtpy
-        for key, value in solver_options.items():
-            # solver_factory.options[key] = value
-            pass
+        # for key, value in solver_options.items():
+        #     # solver_factory.options[key] = value
+        #     pass
 
         # The mindtpy solver has different options for the mip and nlp solver
         pyo_solution = solver_factory.solve(
