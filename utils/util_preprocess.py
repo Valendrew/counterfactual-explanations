@@ -11,7 +11,7 @@ import pandas as pd
 class DataTransformer:
     @staticmethod
     def filter_unwanted_columns(
-        df: pd.DataFrame, keep_cols: typing.List[str], verbose=False
+        df: pd.DataFrame, keep_cols: typing.List[str], dup_cols=None, verbose=False
     ) -> pd.DataFrame:
         """Filter the unwanted columns and duplicates.
 
@@ -26,14 +26,17 @@ class DataTransformer:
         vvprint("Removing unwanted columns and duplicates...")
         vvprint(f"Shape before removing unwanted columns and duplicates: {df.shape}")
 
-        df = df[keep_cols].drop_duplicates().reset_index(drop=True)
+        if dup_cols is None:
+            dup_cols = keep_cols
+
+        df = df[keep_cols].drop_duplicates(subset=dup_cols, ignore_index=True)
 
         vvprint(f"Shape after removing unwanted columns and duplicates: {df.shape}\n")
         return df
 
     @staticmethod
     def filter_unwanted_rows(
-        df: pd.DataFrame, filter_condition: typing.Dict, verbose=False
+        df: pd.DataFrame, filter_condition: typing.Dict, dup_cols=None, verbose=False
     ) -> pd.DataFrame:
         """Filter the unwanted rows and duplicates.
 
@@ -50,13 +53,16 @@ class DataTransformer:
         vvprint("Removing unwanted rows and duplicates...")
         vvprint(f"Shape before removing unwanted rows and duplicates: {df.shape}")
 
+        if dup_cols is None:
+            dup_cols = df.columns
+
         idx = pd.Series([True] * df.shape[0])
         # iterate over the filter conditions and apply the function to the column
         for col, pat in filter_condition:
             idx = idx & pat(df[col])
 
         # drop the unwanted rows and duplicates
-        df = df[idx].drop_duplicates().reset_index(drop=True)
+        df = df[idx].drop_duplicates(dup_cols, ignore_index=True)
 
         vvprint(f"Shape after removing unwanted rows and duplicates: {df.shape}\n")
         return df
@@ -359,9 +365,10 @@ class GSMArenaPreprocess:
             df.pipe(
                 DataTransformer.filter_unwanted_columns,
                 self.unwanted_columns,
-                verbose,
+                verbose=verbose,
             )
             .pipe(self.preprocess_feature, "misc_price", verbose)
+            .pipe(self.preprocess_feature, "oem_model", verbose)
             .pipe(self.preprocess_feature, "launch_announced", verbose)
             .pipe(self.preprocess_feature, "display_size", verbose)
             .pipe(self.preprocess_feature, "battery", verbose)
@@ -378,7 +385,11 @@ class GSMArenaPreprocess:
             .pipe(self.preprocess_feature, "network_technology", verbose)
             .pipe(self.preprocess_feature, "main_camera_cols", verbose)
             .pipe(self.preprocess_feature, "selfie_camera_cols", verbose)
-            .pipe(DataTransformer.filter_unwanted_rows, filter_condition, verbose)
+            .pipe(
+                DataTransformer.filter_unwanted_rows,
+                filter_condition,
+                verbose=verbose,
+            )
         )
 
     def preprocess_feature(
@@ -406,6 +417,8 @@ class GSMArenaPreprocess:
         get the actual column names from the config file."""
         if col_name in self.camera_features.keys():
             feat_cols = self.camera_features[col_name]["cols"]
+        elif col_name in self.concat_features.keys():
+            feat_cols = self.concat_features[col_name]["cols"]
         else:
             feat_cols = [col_name]
 
@@ -476,6 +489,18 @@ class GSMArenaPreprocess:
             # update the col_name and feat_cols to the new columns
             col_name = new_df.columns.to_list()
             feat_cols = col_name
+        elif col_name in self.concat_features.keys():
+            new_df = df[feat_cols].apply(
+                lambda x: " - ".join(x.astype(str)), axis=1
+            ).to_frame()
+            new_df.columns = [col_name]
+
+            df = pd.concat([df, new_df], axis=1)
+            df = df.drop(columns=feat_cols)
+
+            # update the col_name and feat_cols to the new columns
+            col_name = new_df.columns.to_list()
+            feat_cols = col_name
         else:
             vvprint(f"Column {col_name} not processed!")
             raise NotImplementedError
@@ -505,4 +530,3 @@ def extract_prices_rate(curr, ser):
 
     print(f"Number of prices: {len(prices_ext)}")
     return prices_ext, conversion_rate
-
