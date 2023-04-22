@@ -378,7 +378,7 @@ def get_counterfactual_class(initial_class, num_classes, lower=True):
         return initial_class - counterfactual_op
     return initial_class + counterfactual_op
 
-np.max(9)
+
 def create_feature_pyomo_info(
     X: pd.DataFrame,
     continuous_feat: list,
@@ -483,6 +483,58 @@ def check_bounds(X: pd.DataFrame, bounds, feat: list, name: str) -> pd.DataFrame
     bounds = pd.DataFrame(bounds, index=feat)
     return bounds
 
+
+def get_bin_edges(label: float, cols_pipeline):
+    label = int(label)
+    return pd.Series(cols_pipeline.transformers_[0][1][2].bin_edges_.item()[label: label+2], index=["price_min", "price_max"])
+
+
+def inverse_pipeline(cols_pipeline, df):
+    '''
+    It compute the inverse of the transformations applied by the pipeline
+    on the features.
+
+    Parameters:
+    -----------
+    cols_pipeline: 
+        The pipeline used to transform the data.
+    df: pd.DataFrame
+        The dataframe that contains the data to be transformed.
+    
+    Returns:
+    --------
+    results: pd.DataFrame
+        The dataframe with the converted values obtained applying the 
+        inverse_transform function of the pipeline.
+    '''
+    results = pd.DataFrame()
+
+    for name, p, cols in cols_pipeline.transformers_:
+        if name == "pipeline-1":
+            bin_edges = df.misc_price.apply(get_bin_edges, cols_pipeline=cols_pipeline)
+            exp_edges = p[1].inverse_transform(bin_edges)
+            results = pd.concat([results, exp_edges], axis=1)
+
+        elif name == "pipeline-2":
+            quantile_inv = p[0].inverse_transform(df[cols])
+            quantile_df = pd.DataFrame(quantile_inv, columns=cols, index=df.index)
+            results = pd.concat([results, quantile_df], axis=1)
+
+        elif name == "pipeline-3":
+            results = pd.concat([results, df[cols]], axis=1)
+
+        elif name == "pipeline-4":
+            ordinal_inv = p[0].inverse_transform(df[cols])
+            ordinal_df = pd.DataFrame(ordinal_inv, columns=cols, index=df.index)
+            results = pd.concat([results, ordinal_df], axis=1)
+
+        elif name == "pipeline-5":
+            cols = p[1].feature_names_in_
+            ordinal_inv = p[1].inverse_transform(df[cols])
+            ordinal_df = pd.DataFrame(ordinal_inv, columns=cols, index=df.index)
+            results = pd.concat([results, ordinal_df], axis=1)
+
+    return results
 
 class OmltCounterfactual:
     def __init__(
@@ -781,7 +833,7 @@ class OmltCounterfactual:
 class DiceCounterfactual:
     """
     It's a class that allows you to create Dice counterfactuals, taking as input
-    a model, the dataframe with the data, the continuous feature and the target.
+    a model, the dataframe with the data, the continuous feature and the target feature.
     """
 
     def __init__(
@@ -789,16 +841,17 @@ class DiceCounterfactual:
     ):
         """
         Parameters:
-            - model:
-                It's the model to use for counterfactuals.
-            - backend: str
-                A string between 'sklearn', 'TF1', 'TF2' and 'PYT'.
-            - data: pd.DataFrame
-                The data used from Dice for statistics.
-            - cont_feat: list[str]
-                The list of names of continuous features.
-            - target: str
-                The name of the target feature.
+        -----------
+        model:
+            It's the model to use for counterfactuals (torch, sklearn or tensorflow).
+        backend: str
+            A string between 'sklearn', 'TF1', 'TF2' and 'PYT'.
+        data: pd.DataFrame
+            The data used from Dice for statistics.
+        cont_feat: list[str]
+            The list of names of continuous features.
+        target: str
+            The name of the target feature.
         """
         self.model = dice_ml.Model(model=model, backend=backend)
         self.data = dice_ml.Data(
@@ -810,44 +863,62 @@ class DiceCounterfactual:
         self.explanation = None
         self.CFs = None
 
+
     def create_explanation_instance(self, method: str = "genetic"):
         """
         It generates the Dice explanation instance using the model and the
         data passed during the initialization.
 
         Parameters:
-            - method: str
-                The method that will be used during the counterfactual generation.
-                A string between 'random', 'kdtree', 'genetic'.
+        -----------
+        method: str
+            The method that will be used during the counterfactual generation.
+            A string between 'random', 'kdtree', 'genetic' or 'gradient' for differentiable
+            models.
         """
         self.explanation = dice_ml.Dice(self.data, self.model, method=method)
 
+
     def generate_counterfactuals(
-        self, sample: pd.DataFrame, new_class: int, target: str, n_cf: int = 1, **kwargs
+        self, sample: pd.DataFrame, new_class: int, target: str, n_cf: int=1, 
+        proximity_weight: float=0.4, sparsity_weight: float=0.7, stopping_threshold: float=0.5,
+        feature_weights="inverse_mad", features_to_vary='all'
     ):
         """
         It generates the counterfactuals using an explanation instance.
 
         Parameters:
-            - sample: pd.DataFrame
-                The dataframe that contains the samples for which the model
-                will generate the counterfactuals.
-            - new_class: int
-                The new label the counterfactuals will be predicted with.
-            - target: str
-                The name of the target feature, that will be removed from the
-                sample before generating the counterfactuals.
-            - n_cf: int
-                The number of counterfactuals to generate for each sample.
-            - **kwargs:
-                Additional parameters to pass to the Dice method for generating
-                counterfactuals.
-
+        -----------
+        sample: pd.DataFrame
+            The dataframe that contains the samples for which the model
+            will generate the counterfactuals.
+        new_class: int
+            The new label the counterfactuals will be predicted with.
+        target: str
+            The name of the target feature, that will be removed from the
+            sample before generating the counterfactuals.
+        n_cf: int
+            The number of counterfactuals to generate for each sample.
+        proximity_weight: float
+            The weight to consider for the proximity of the counterfactual
+            to the original sample, used by 'genetic' generation.
+        sparsity_weight: float
+            The weight to change less features when the counterfactual is
+            created, used by 'genetic' generation.
+        stopping_threshold: float
+            The minimum threshold to for counterfactual target probability.
+        features_weights: str or dict
+            The dictionary with the name of the features as key and the weight
+            as value. By default is the 'inverse_mad'.
+        features_to_vary: str or list[str]
+            The string 'all' to consider all the features or a list of features
+            present in the dataframe columns.
+        
         Returns:
-            - list[pd.DataFrame]
-                It returns a list with a DataFrame that contains the counterfactual
-                values for each sample, if n_cf > 1 the dataframe will contain
-                n_cf rows.
+        --------
+        list: pd.DataFrame
+            It returns a list with a DataFrame that contains the counterfactual
+            values for each sample, if n_cf > 1 the dataframe will contain n_cf rows.
         """
         assert isinstance(
             sample, pd.DataFrame
@@ -861,63 +932,85 @@ class DiceCounterfactual:
         # Save the passed samples
         self.start_samples = sample.copy()
         raw_CFs = self.explanation.generate_counterfactuals(
-            sample.drop(target, axis=1),
-            total_CFs=n_cf,
-            desired_class=new_class,
-            **kwargs,
+            sample.drop("misc_price", axis=1), total_CFs=n_cf,
+            desired_class=new_class, proximity_weight=proximity_weight,
+            sparsity_weight=sparsity_weight, stopping_threshold=stopping_threshold,
+            feature_weights=feature_weights, features_to_vary=features_to_vary
         )
         self.CFs = [cf.final_cfs_df.astype(float) for cf in raw_CFs.cf_examples_list]
 
         return self.CFs
 
-    def destandardize_cfs_orig(self, scaler_num):
+
+    def destandardize_cfs_orig(self, pipeline):
         """
         It works on the last generated counterfactuals and the relative
-        starting samples, inverting the transform process applied to standardize
-        the data.
+        starting samples, inverting the transform process applied to the data.
 
         Parameters:
-            - scaler_num:
-                The standard scaler that normalized the continuous features.
+        -----------
+        pipeline:
+            The pipeline used to preprocess the dataset.
 
         Returns:
-            - list
-                It returns a list of pairs sample - counterfactuals with
-                unstandardized values, in practice are both pd.DataFrame.
+        --------
+        list
+            It returns a list of pairs sample - counterfactuals with
+            unstandardized values, in practice are both pd.DataFrame.
         """
         assert self.CFs is not None, "The CFs have not been created yet."
 
-        std_feat = scaler_num.feature_names_in_
-        inv_standardize = lambda df: scaler_num.inverse_transform(df)
         # Destandardize the samples for which we create the cfs
-        self.start_samples[std_feat] = inv_standardize(self.start_samples[std_feat])
-
+        self.start_samples = inverse_pipeline(pipeline, self.start_samples)
         # Apply to the different dataframes of the counterfactuals
-        for cf in self.CFs:
-            cf[std_feat] = inv_standardize(cf[std_feat])
-
+        self.CFs = [inverse_pipeline(pipeline, cf) for cf in self.CFs]
+        
         pairs = []
         for i in range(self.start_samples.shape[0]):
             pairs.append((self.start_samples.iloc[[i]], self.CFs[i]))
 
         return pairs
 
+
     def __color_df_diff(self, row, color):
-        # left_cell = f"border: 1px solid {color}; border-right: 0px"
-        # right_cell = f"border: 1px solid {color}; border-left: 0px"
-        # return [left_cell, right_cell] if x[0] - x[1] != 0 else ["", ""]
+        """
+        It returns for a single row the color needed to highlight the difference
+        between the counterfactual and the original sample.
+
+        Parameters:
+        -----------
+        row: pd.Series
+            The series to consider for the operations.
+        color: str
+            The name of the color to use for the border of the cells.
+        
+        Returns:
+        --------
+        list[str]
+            It returns the list of strings that will be used to color the dataframe.
+        """
         cell_border = f"border: 1px solid {color}"
         res = []
         for i in range(1, len(row)):
-            if row[0] - row[i] != 0:
-                res.append(cell_border)
+            # If string
+            if isinstance(row[0], str):
+                if row[0] != row[i]:
+                    res.append(cell_border)
+                else:
+                    res.append("")
+            # If numerical value
             else:
-                res.append("")
+                if row[0] - row[i] != 0:
+                    res.append(cell_border)
+                else:
+                    res.append("")
+
         if any(res):
             res.insert(0, cell_border)
         else:
             res.append("")
         return res
+
 
     def compare_sample_cf(self, pairs, highlight_diff=True, color="red"):
         """
@@ -925,31 +1018,33 @@ class DiceCounterfactual:
         the original sample and a column for each generated counterfactual.
 
         Parameters:
-            - pairs: list
-                The list of pairs returned by the 'destandardize_cfs_orig'
-                function.
-            - highlight_diff: bool
-                If True, the border of the changed features will be colored.
-            - color: str
-                The color to use for highlight the differences beteween columns.
+        -----------
+        pairs: list
+            The list of pairs returned by the 'destandardize_cfs_orig'
+            function.
+        highlight_diff: bool
+            If True, the border of the changed features will be colored.
+        color: str
+            The color to use for highlight the differences beteween columns.
 
         Returns:
-            - list
-                A list of dataframe which have in each column the values of
-                the original sample and the counterfactuals.
+        --------
+        list
+            A list of dataframe which have in each column the values of
+            the original sample and the counterfactuals.
         """
         comp_dfs = []
         for i in range(len(pairs)):
-            sample, cfs = pairs[i][0].transpose().round(3), pairs[i][
-                1
-            ].transpose().round(3)
+            sample = pairs[i][0].transpose().round(3)
+            cfs = pairs[i][1].transpose().round(3)
+            
             # Rename the dataframes correctly
             sample.columns = ["Original sample"]
             cfs.columns = [f"Counterfactual_{k}" for k in range(cfs.shape[1])]
 
             comp_df = pd.concat([sample, cfs], axis=1)
-            comp_df = comp_df.style.apply(
-                self.__color_df_diff, color=color, axis=1
-            ).format(precision=3)
+            if highlight_diff:
+                comp_df = comp_df.style.apply(self.__color_df_diff, color=color, axis=1) \
+                                       .format(precision=3)
             comp_dfs.append(comp_df)
         return comp_dfs
