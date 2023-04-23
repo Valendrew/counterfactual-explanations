@@ -453,26 +453,40 @@ def compare_models(X, y, models, model_names, rng):
     return X_test, y_test, y_preds
 
 
-def evaluate_sample(model, sample_idx, device):
+def evaluate_sample(model, sample_idx, y_idx, device=torch.device("cpu"), verbose=True):
+    '''
+    It evaluates a given sample, running the model on it and computing
+    the logits, the softmax, the predicted class and the marginal softmax.
+    I returns a warning if sample_idx predicted label is different from y_idx.
+    '''
+    vprint = print if verbose else lambda *args, **kwargs: None
     model.eval()
     with torch.no_grad():
         model = model.to(device)
-        sample_idx = torch.tensor(sample_idx, dtype=torch.float).view(1, -1).to(device)
+        if isinstance(sample_idx, pd.DataFrame): 
+            sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
+        else:
+            sample_idx = torch.tensor(sample_idx, dtype=torch.float).view(1, -1).to(device)
 
         # inference and print logits
         y_logit = model(sample_idx)
-        # print(f"Logits: {y_logit.squeeze()}")
+        vprint(f"Logits: {y_logit.squeeze()}")
         
         # compute softmax
         y_prob = torch.softmax(y_logit, dim=1)
-        # print(f"Softmax: {y_prob.squeeze()}")
+        vprint(f"Softmax: {y_prob.squeeze()}")
 
         # print softmax of predicted class
         y_pred = torch.argmax(y_prob, dim=1)
-        # print(f"Predicted class {y_pred.item()} with probability: {y_prob.squeeze()[y_pred].item():.3f} and logit: {y_logit.squeeze()[y_pred].item():.3f}")
-
+        vprint(f"Predicted class {y_pred.item()} with probability: {y_prob.squeeze()[y_pred].item():.3f} and logit: {y_logit.squeeze()[y_pred].item():.3f}")
+        
         # marginlal softmax
         marginal_softmax = torch.log(torch.sum(torch.exp(y_logit))) - y_logit.squeeze()[y_pred].item()
-        # print(f"Marginal softmax: {marginal_softmax:.3f}\n")
+        vprint(f"Marginal softmax: {marginal_softmax:.3f}\n")
 
-    return y_pred.item(), y_prob.squeeze(), marginal_softmax
+        if y_pred.item() != y_idx:
+            vprint("WARNING: the predicted label for the sample is different from the groundtruth.")
+        else:
+            vprint("The predicted class for the sample is equal to the groundtruth.")
+        
+    return y_pred.item()
