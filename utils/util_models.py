@@ -490,3 +490,40 @@ def evaluate_sample(model, sample_idx, y_idx, device=torch.device("cpu"), verbos
             vprint("The predicted class for the sample is equal to the groundtruth.")
         
     return y_pred.item()
+
+
+def get_correct_wrong_predictions(model, X, y, device=torch.device('cpu')):
+    '''
+        It returns the indexes of the corrected predicted samples and
+        the indexes of the wrong ones. It works with a pytorch nn.
+
+        Parameters:
+        -----------
+        model: 
+            A pytorch neural network you want to use for the test.
+        X: pd.DataFrame
+            The dataframe that contains the samples for which the model
+            needs to predict the class.
+        y: pd.Series
+            The series with the labels of the passed samples.
+
+        Returns:
+        --------
+        tuple(list, list)
+            The list with the indexes of the correctly predicted samples as first
+            element and the list with the errors as the second one.
+    '''
+    model.eval()
+    with torch.no_grad():
+        x_tensor = torch.tensor(X.values, dtype=torch.float)
+        y_tensor = torch.tensor(y.values, dtype=torch.float)
+
+        y_logits = model(x_tensor)
+        y_pred = torch.argmax(y_logits, dim=1)
+
+        # Take the from the index the correctly predicted labels
+        ind_corr = X.index[(y_tensor == y_pred)].tolist()
+        # Subtract from the index the previous labels to get the wrong ones
+        ind_wrong = X.index.difference(ind_corr, sort=False).tolist()
+
+    return ind_corr, ind_wrong
