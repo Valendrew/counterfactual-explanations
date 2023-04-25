@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 import pandas as pd
+from sklearn.pipeline import Pipeline
 
 # pyomo for optimization
 import pyomo.environ as pyo
@@ -484,11 +485,6 @@ def check_bounds(X: pd.DataFrame, bounds, feat: list, name: str) -> pd.DataFrame
     return bounds
 
 
-def get_bin_edges(label: float, cols_pipeline):
-    label = int(label)
-    return pd.Series(cols_pipeline.transformers_[0][1][2].bin_edges_.item()[label: label+2], index=["price_min", "price_max"])
-
-
 def inverse_pipeline(cols_pipeline, df):
     '''
     It compute the inverse of the transformations applied by the pipeline
@@ -507,34 +503,24 @@ def inverse_pipeline(cols_pipeline, df):
         The dataframe with the converted values obtained applying the 
         inverse_transform function of the pipeline.
     '''
-    results = pd.DataFrame()
+    inverted_df = pd.DataFrame()
+    for name, pl, in_cols in cols_pipeline.transformers_:
+        if name == "remainder":
+            continue
+        pl: Pipeline = pl
+        in_cols: list[str] = in_cols
+        # assert isinstance(t[1], Pipeline)
 
-    for name, p, cols in cols_pipeline.transformers_:
-        if name == "pipeline-1":
-            bin_edges = df.misc_price.apply(get_bin_edges, cols_pipeline=cols_pipeline)
-            exp_edges = p[1].inverse_transform(bin_edges)
-            results = pd.concat([results, exp_edges], axis=1)
+        out_cols = pl.get_feature_names_out(in_cols)
+        # print(f"{name}: {out_cols}", end="\n\n")
+        results = pl.inverse_transform(df[out_cols])
+        # if the result is a numpy array, convert it to a dataframe
+        if isinstance(results, np.ndarray):
+            results = pd.DataFrame(results, columns=out_cols, index=df.index)
 
-        elif name == "pipeline-2":
-            quantile_inv = p[0].inverse_transform(df[cols])
-            quantile_df = pd.DataFrame(quantile_inv, columns=cols, index=df.index)
-            results = pd.concat([results, quantile_df], axis=1)
+        inverted_df = pd.concat([inverted_df, pd.DataFrame(results)], axis=1)
 
-        elif name == "pipeline-3":
-            results = pd.concat([results, df[cols]], axis=1)
-
-        elif name == "pipeline-4":
-            ordinal_inv = p[0].inverse_transform(df[cols])
-            ordinal_df = pd.DataFrame(ordinal_inv, columns=cols, index=df.index)
-            results = pd.concat([results, ordinal_df], axis=1)
-
-        elif name == "pipeline-5":
-            cols = p[1].feature_names_in_
-            ordinal_inv = p[1].inverse_transform(df[cols])
-            ordinal_df = pd.DataFrame(ordinal_inv, columns=cols, index=df.index)
-            results = pd.concat([results, ordinal_df], axis=1)
-
-    return results
+    return inverted_df
 
 
 class BaseCounterfactual:
