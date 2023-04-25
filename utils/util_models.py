@@ -323,7 +323,7 @@ class TrainTestNetwork:
 
         # set the loss function and the optimizer
         loss_fn = torch.nn.CrossEntropyLoss(weight=ce_weights)
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=15, threshold=1e-2, factor=0.5, verbose=True, mode="max"
         )

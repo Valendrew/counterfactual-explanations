@@ -491,7 +491,7 @@ class GSMArenaPreprocess:
             feat_cols = col_name
         elif col_name in self.concat_features.keys():
             new_df = df[feat_cols].apply(
-                lambda x: " - ".join(x.astype(str)), axis=1
+                lambda x: " ".join(x.astype(str)), axis=1
             ).to_frame()
             new_df.columns = [col_name]
 
