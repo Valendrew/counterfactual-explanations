@@ -873,6 +873,7 @@ class OmltCounterfactual(BaseCounterfactual):
         cont_weights=[],
         cat_weights=[],
         fixed_features=[],
+        solver="mindtpy",
         solver_options={},
         verbose=True,
     ) -> pd.DataFrame:
@@ -896,6 +897,9 @@ class OmltCounterfactual(BaseCounterfactual):
             The weights to consider for the categorical features in the Gower distance.
         fixed_features: list, optional
             List of features which are fixed. Defaults to [].
+        solver: str
+            The solver to use for computing the solution, one between 'mindtpy' and 'multistart'.
+            In the case of 'mindtpy', cplex and ipopt will be used, in the other case only ipopt.
         solver_options: dict, optional
             Options for the solver. Defaults to {}.
         verbose: bool, optional
@@ -919,22 +923,29 @@ class OmltCounterfactual(BaseCounterfactual):
             fixed_features,
         )
 
+        assert solver in ['mindtpy', 'multistart'], "The selected solver is not available, choose between 'mindtpy' and 'multistart'."
         # Set the solver to mindtpy
-        solver_factory = pyo.SolverFactory("mindtpy")
+        solver_factory = pyo.SolverFactory(solver)
 
-        # Set the solver options. These options are used for all solvers except mindtpy
-        # for key, value in solver_options.items():
-        #     # solver_factory.options[key] = value
-        #     pass
-
-        # The mindtpy solver has different options for the mip and nlp solver
-        pyo_solution = solver_factory.solve(
-            self.pyo_model,
-            tee=verbose,
-            time_limit=solver_options["timelimit"],
-            mip_solver=self.AVAILABLE_SOLVERS["mip"],
-            nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
-        )
+        if solver == "mindtpy":
+            pyo_solution = solver_factory.solve(
+                self.pyo_model,
+                tee=verbose,
+                time_limit=solver_options["timelimit"],
+                mip_solver=self.AVAILABLE_SOLVERS["mip"],
+                nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
+            )
+        else:
+            vprint = print if verbose else lambda *args, **kwargs: None
+            vprint("\nStarting the search for a counterfactual ...")
+            pyo_solution = solver_factory.solve(
+                self.pyo_model,
+                solver_args={'timelimit': solver_options['timelimit']},
+                suppress_unbounded_warning=True,
+                strategy=solver_options['strategy']
+            )
+            vprint("The counterfactual has been generated!\n")
+            
         self.start_samples = sample
         # Convert the pyomo solution to a dataframe
         counterfactual_sample = list(self.pyo_model.nn.inputs.get_values().values())
@@ -1051,12 +1062,21 @@ class DiceCounterfactual(BaseCounterfactual):
 
         # Save the passed samples
         self.start_samples = sample.copy()
-        raw_CFs = self.explanation.generate_counterfactuals(
-            sample.drop(target, axis=1), total_CFs=n_cf,
-            desired_class=new_class, proximity_weight=proximity_weight,
-            sparsity_weight=sparsity_weight, stopping_threshold=stopping_threshold,
-            feature_weights=feature_weights, features_to_vary=features_to_vary
-        )
+
+        if isinstance(dice_ml.explainer_interfaces.dice_genetic.DiceGenetic, type(self.explanation)):
+            raw_CFs = self.explanation.generate_counterfactuals(
+                sample.drop(target, axis=1), total_CFs=n_cf,
+                desired_class=new_class, proximity_weight=proximity_weight,
+                sparsity_weight=sparsity_weight, stopping_threshold=stopping_threshold,
+                feature_weights=feature_weights, features_to_vary=features_to_vary
+            )
+        else:
+            # Random method doesn't support some parameters
+            raw_CFs = self.explanation.generate_counterfactuals(
+                sample.drop(target, axis=1), total_CFs=n_cf, desired_class=new_class, 
+                stopping_threshold=stopping_threshold, features_to_vary=features_to_vary
+            )
+
         self.CFs = [cf.final_cfs_df.astype(float) for cf in raw_CFs.cf_examples_list]
 
         return self.CFs
