@@ -287,3 +287,22 @@ class DisplayEncoder(FunctionTransformer):
 
     def get_feature_names_out(self, input_features: npt.ArrayLike = None) -> np.ndarray:
         return np.array(["display_resolution"])
+
+
+class ClipEncoder(FunctionTransformer):
+    def __init__(self, lower: float, upper: float, clip: bool,**kwargs):
+        self.lower = lower
+        self.upper = upper
+        self.clip = clip
+        super().__init__(self.compute_encoding, **kwargs)
+
+    def compute_encoding(self, X: pd.DataFrame) -> pd.DataFrame:
+        assert isinstance(X, pd.DataFrame), "X must be a DataFrame"
+        if self.clip:
+            return X.clip(lower=self.lower, upper=self.upper)
+        else:
+            return X[(X >= self.lower) & (X <= self.upper)]
+
+    def get_feature_names_out(self, input_features: npt.ArrayLike = None) -> np.ndarray:
+        return np.array(["clip"])
+    

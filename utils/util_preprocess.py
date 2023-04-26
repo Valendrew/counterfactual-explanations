@@ -213,7 +213,6 @@ class DataTransformer:
         extract_col = extract_col.rename(columns=repl_cols)
         # convert the height and width to float
         extract_col = extract_col.astype(float)
-
         vvprint(
             f"Number of rows without a value: {extract_col.isna().any(axis=1).sum()}"
         )

@@ -236,6 +236,7 @@ def gower_distance(
     if len(cont_weights) == 0:
         cont_weights = [1] * len(idx_cont)
 
+    # Check that the number of weights is equal to the number of features
     for type_feat, type_weight in zip([idx_cat, idx_cont], [cat_weights, cont_weights]):
         if len(type_weight) != len(type_feat):
             raise ValueError(
@@ -481,8 +482,7 @@ def check_bounds(X: pd.DataFrame, bounds, feat: list, name: str) -> pd.DataFrame
             print(f"WARNING: {name} upper bound is out of range for some features")
 
     bounds = np.concatenate((bound_min, bound_max), axis=1)
-    bounds = pd.DataFrame(bounds, index=feat)
-    return bounds
+    return pd.DataFrame(bounds, index=feat)
 
 
 def inverse_pipeline(cols_pipeline, df):
@@ -812,7 +812,6 @@ class OmltCounterfactual(BaseCounterfactual):
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
-            obj_1 = 0
             raise Exception("Objective 1 must be computed.")
         else:
             obj_1 = compute_obj_1_marginal_softmax(
@@ -1066,7 +1065,7 @@ class DiceCounterfactual(BaseCounterfactual):
 
 def generate_counterfactual_from_sample(
         model, cf_class, X_train, y_train, sample, sample_label, 
-        cont_feat=None, lower_cf=True, backend="PYT", target_dice="misc_price",
+        cont_feat=None, type_cf="lower", backend="PYT", target_dice="misc_price",
         dice_method='random', pipeline=None, **kwargs_cf
 ):
     """
@@ -1092,9 +1091,8 @@ def generate_counterfactual_from_sample(
         The class of the passed sample.
     cont_feat: list[str]
         A list of continuous features, mandatory only for the Omlt class.
-    lower_cf: bool
-        If the counterfactual class needs to be 1 value lower than 'sample_label' if
-        possible.
+    type_cf: str
+        The new counterfactual class, if it needs to be lowered, increased or kept the same.
     backend: str
         The backend to use to initialize the Dice model.
     target_dice: str
@@ -1132,11 +1130,21 @@ def generate_counterfactual_from_sample(
     else:
         raise Exception("Counterfactual class not recognized.")
     
-    cf_class = get_counterfactual_class(sample_label, 3, lower_cf)
+    # Get the counterfactual class
+    if type_cf in ["lower", "increase"]:
+        lower_cf = True if type_cf == "lower" else False
+        cf_class = get_counterfactual_class(sample_label, 3, lower_cf)
+    elif type_cf == "same":
+        cf_class = sample_label
+    else:
+        raise Exception("Counterfactual class not recognized.")
+    
+    # Generate the counterfactuals
     cf = cf_model.generate_counterfactuals(
         sample, cf_class, **kwargs_cf
     )
 
+    # Denormalize the counterfactuals
     if pipeline is not None:
         pairs = cf_model.destandardize_cfs_orig(pipeline=pipeline)
     else:

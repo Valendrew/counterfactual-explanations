@@ -218,6 +218,8 @@ class LightGBM:
             print("ERROR: the selected kind of chart is not available.")
 
 
+from sklearn.metrics import balanced_accuracy_score
+
 def multi_acc(y_pred, y_test=None):
     y_pred_softmax = torch.log_softmax(y_pred, dim=1)
     _, y_pred_tags = torch.max(y_pred_softmax, dim=1)
@@ -225,6 +227,7 @@ def multi_acc(y_pred, y_test=None):
     if y_test is None:
         return y_pred_tags
 
+    return balanced_accuracy_score(y_test.cpu(), y_pred_tags.cpu(), adjusted=False)
     return (y_pred_tags == y_test).sum().float()
 
 
@@ -272,7 +275,7 @@ class TrainTestNetwork:
             epoch_acc += self.metric_fn(y_pred, y_batch)
 
         loss_val = epoch_loss / len(train_loader)
-        accuracy_val = epoch_acc * 100 / len(train_loader.dataset)
+        accuracy_val = epoch_acc / len(train_loader)
         return loss_val, accuracy_val
 
     def __test_loop(self, test_loader, loss_fn):
@@ -291,7 +294,7 @@ class TrainTestNetwork:
                 epoch_acc += self.metric_fn(y_pred, y_batch)
 
         loss_val = epoch_loss / len(test_loader)
-        accuracy_val = epoch_acc * 100 / len(test_loader.dataset)
+        accuracy_val = epoch_acc / len(test_loader)
         return loss_val, accuracy_val
 
     def train_model(
@@ -325,7 +328,7 @@ class TrainTestNetwork:
         loss_fn = torch.nn.CrossEntropyLoss(weight=ce_weights)
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, patience=15, threshold=1e-2, factor=0.5, verbose=True, mode="max"
+            optimizer, patience=5, cooldown=5, threshold=1e-1, factor=0.5, min_lr=1e-6, verbose=True, mode="min"
         )
 
         # list to store the losses and accuracies
@@ -342,7 +345,7 @@ class TrainTestNetwork:
             train_accuracies.append(train_acc)
             val_accuracies.append(val_acc)
 
-            if val_acc > max_accuracy:
+            if val_acc > max_accuracy and e > 20:
                 max_accuracy = val_acc
                 torch.save(
                     {
@@ -353,10 +356,11 @@ class TrainTestNetwork:
                     },
                     name_model,
                 )
-                print(f"Model saved with accuracy: {val_acc:.3f}")
+                print(f"Model saved with accuracy: {val_acc:.3f} at epoch {e}")
 
             if reduce_lr:
-                scheduler.step(val_acc)
+                # scheduler.step(val_acc)
+                scheduler.step(val_loss)
 
             if e % print_every == 0:
                 print(
