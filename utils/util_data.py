@@ -1,11 +1,14 @@
 import os
 import shutil
+from typing import Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelBinarizer, StandardScaler, FunctionTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelBinarizer, StandardScaler, FunctionTransformer, RobustScaler
 
 import gdown
 
@@ -270,6 +273,7 @@ class LabelEncoder(FunctionTransformer):
     def get_feature_names_out(self, input_features: npt.ArrayLike = None) -> np.ndarray:
         return np.array(["misc_price"])
 
+
 class DisplayEncoder(FunctionTransformer):
     def __init__(self, resolutions: pd.DataFrame, **kwargs):
         self.resolutions = resolutions
@@ -290,7 +294,7 @@ class DisplayEncoder(FunctionTransformer):
 
 
 class ClipEncoder(FunctionTransformer):
-    def __init__(self, lower: float, upper: float, clip: bool,**kwargs):
+    def __init__(self, lower: float, upper: float, clip: bool, **kwargs):
         self.lower = lower
         self.upper = upper
         self.clip = clip
@@ -305,4 +309,129 @@ class ClipEncoder(FunctionTransformer):
 
     def get_feature_names_out(self, input_features: npt.ArrayLike = None) -> np.ndarray:
         return np.array(["clip"])
+
+
+def transform_cont_feature(name_feat: str, X: pd.DataFrame, pipeline: Pipeline) -> pd.DataFrame:
+    """Inverse transform of a continuous feature.
+
+    Parameters
+    ----------
+    name_feat : str
+        name of the feature to transform
+    X : pd.DataFrame
+        dataframe with the feature to transform
+    pipeline : Pipeline
+        pipeline with the transformation
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe with the transformed feature and the original feature
+
+    Raises
+    ------
+    ValueError
+        The feature to transform is not found in the dataframe
+    ValueError
+        The feature to transform is not found in the pipeline
+    """    
+    if name_feat not in X.columns:
+        raise ValueError(f"Feature {name_feat} not found in dataframe")
+
+    col_inv_name = f"{name_feat}_inv"
+    feature_vals = np.sort(X[name_feat].unique())
+    feat_names = pipeline.feature_names_in_
+    # Get the index of the feature in the pipeline
+    idx = (
+        sum(i + 1 if feat == name_feat else 0 for i, feat in enumerate(feat_names)) - 1
+    )
+    if idx < 0:
+        raise ValueError(f"Feature {name_feat} not found in pipeline")
+
+    # Create a matrix with the feature values only for the feature to transform
+    feat_trans = np.zeros((pipeline.feature_names_in_.shape[0], feature_vals.shape[0]))
+    feat_trans[idx, :] = feature_vals
+
+    df_feat_trans = pd.DataFrame(feat_trans.T, columns=pipeline.feature_names_in_)
+    inverse_feat_trans = pipeline.inverse_transform(df_feat_trans)
+    df_inverse_feat_trans = pd.DataFrame(
+        inverse_feat_trans, columns=pipeline.feature_names_in_
+    ).rename(columns={name_feat: col_inv_name})
+    return pd.concat(
+        [df_feat_trans[name_feat], df_inverse_feat_trans[col_inv_name]], axis=1
+    )
+
+
+def try_scaler(
+    scaler: str, name_feat: str, X: pd.DataFrame, log=True, round=False, **kwargs
+) -> Tuple[pd.DataFrame, Pipeline]:
+    if name_feat not in X.columns:
+        raise ValueError(f"Feature {name_feat} not found in dataframe")
+
+    feature_vals = X[[name_feat]]
+    # feature_vals = feature_vals.values.reshape(-1, 1)
+
+    pipeline_scalers = list()
+    # Add the round scaler if needed
+    if round:
+        round_scaler = FunctionTransformer(np.round, validate=False)
+        pipeline_scalers.append(("round", round_scaler))
     
+    # Add the log scaler if needed
+    if log:
+        log_scaler = FunctionTransformer(np.log1p, inverse_func=np.expm1, validate=False, check_inverse=False)
+        pipeline_scalers.append(("log", log_scaler))
+
+    if scaler == "robust":
+        num_scaler = RobustScaler(**kwargs)
+    elif scaler == "standard":
+        num_scaler = StandardScaler(**kwargs)
+    else:
+        raise ValueError(f"Scaler {scaler} not found")
+    
+    pipeline_scalers.append(("scaler", num_scaler))
+
+
+    pipeline = Pipeline(pipeline_scalers)
+    transform_vals = pipeline.fit_transform(feature_vals)
+
+    return pd.DataFrame(transform_vals, columns=[name_feat]), pipeline
+
+def compare_scalers(name_feat: str, df: pd.DataFrame, original_df: pd.DataFrame, original_pipeline: Pipeline, **kwargs):
+    # Try Robust Scaler
+    robust_1_dict = {
+        "with_centering": True,
+        "with_scaling": True,
+        "quantile_range": (25.0, 75.0),
+        "unit_variance": True
+    }
+    df_ret_robust, num_pipeline = try_scaler("robust", name_feat, df, **robust_1_dict, **kwargs)
+    unique_robust = transform_cont_feature(name_feat, df_ret_robust, num_pipeline)
+
+    # Try Standard Scaler
+    standard_1_dict = {
+        "with_mean": True,
+        "with_std": True,
+    }
+    df_ret_standard, num_pipeline = try_scaler("standard", name_feat, df, **standard_1_dict, **kwargs)
+    unique_standard = transform_cont_feature(name_feat, df_ret_standard, num_pipeline)
+
+    # Convert original data
+    unique_original = transform_cont_feature(name_feat, original_df, original_pipeline)
+
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    faxs = axs.ravel()
+
+    df_scalers_dict = {
+        "Robust Scaler": df_ret_robust,
+        "Standard Scaler": df_ret_standard,
+        "Original Data": original_df
+    }
+
+    for i, (name_scaler, df_scaler) in enumerate(df_scalers_dict.items()):
+        df_scaler[name_feat].hist(bins=50, ax=faxs[i])
+        faxs[i].set_title(name_scaler)
+    fig.tight_layout()
+
+    return unique_standard.merge(unique_robust, how="outer", left_index=True, right_index=True, suffixes=["_standard", "_robust"]).\
+        merge(unique_original, how="outer", left_index=True, right_index=True)

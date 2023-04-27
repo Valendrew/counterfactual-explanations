@@ -46,15 +46,17 @@ class TestData(Dataset):
 
 
 class NNClassification(nn.Module):
-    def __init__(self, hidden_dims, num_feat: int, num_class: int):
+    def __init__(self, hidden_dims, num_feat: int, num_class: int, dropout_rate: float):
         super(NNClassification, self).__init__()
         self.n_hidden_dims = len(hidden_dims)
 
         self.layer_1 = nn.Linear(num_feat, hidden_dims[0])
 
         self.hidden_layers = nn.ModuleList()
+        self.dropout_layers = nn.ModuleList()
         for i in range(self.n_hidden_dims - 1):
             self.hidden_layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
+            self.dropout_layers.append(nn.Dropout(p=dropout_rate))
 
         self.layer_n = nn.Linear(hidden_dims[-1], num_class)
 
@@ -64,8 +66,9 @@ class NNClassification(nn.Module):
         x = self.relu(self.layer_1(inputs))
 
         for i in range(self.n_hidden_dims - 1):
-            x = self.relu(self.hidden_layers[i](x))
-
+            # x = self.relu(self.hidden_layers[i](x))
+            x = self.relu(self.dropout_layers[i](self.hidden_layers[i](x)))
+            
         x = self.layer_n(x)
 
         return x
@@ -307,8 +310,12 @@ class TrainTestNetwork:
         print_every=2,
         reset_weights=True,
         ce_weights=None,
+        max_metric=0,
+        weight_decay=0.1,
         reduce_lr=False,
-        max_accuracy=0,
+        cosine_annealing=False,
+        cosine_t0=10,
+        cosine_tmult=1,
         name_model="best_model.pt",
     ):
         # create the data loaders for the training and validation sets
@@ -326,51 +333,61 @@ class TrainTestNetwork:
 
         # set the loss function and the optimizer
         loss_fn = torch.nn.CrossEntropyLoss(weight=ce_weights)
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.01)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, patience=5, cooldown=5, threshold=1e-1, factor=0.5, min_lr=1e-6, verbose=True, mode="min"
-        )
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+        
+        assert not (reduce_lr and cosine_annealing), "You can't use both reduce_lr and cosine_annealing"
+        if reduce_lr:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, patience=20, cooldown=5, threshold=1e-3, factor=0.9, min_lr=1e-6, verbose=True, mode="min"
+            )
+        elif cosine_annealing:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=cosine_t0, T_mult=cosine_tmult, eta_min=1e-6)
 
         # list to store the losses and accuracies
         train_losses, val_losses = [], []
-        train_accuracies, val_accuracies = [], []
+        train_metrics, val_metrics = [], []
 
         # train the model for the specified number of epochs
         for e in range(1, epochs + 1):
-            train_loss, train_acc = self.__train_loop(train_loader, loss_fn, optimizer)
-            val_loss, val_acc = self.__test_loop(val_loader, loss_fn)
+            train_loss, train_metric = self.__train_loop(train_loader, loss_fn, optimizer)
+            val_loss, val_metric = self.__test_loop(val_loader, loss_fn)
 
             train_losses.append(train_loss)
             val_losses.append(val_loss)
-            train_accuracies.append(train_acc)
-            val_accuracies.append(val_acc)
+            train_metrics.append(train_metric)
+            val_metrics.append(val_metric)
 
-            if val_acc > max_accuracy and e > 20:
-                max_accuracy = val_acc
-                torch.save(
-                    {
-                        "model_state_dict": self.model.state_dict(),
-                        "epoch": e,
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "loss": val_loss,
-                    },
-                    name_model,
-                )
-                print(f"Model saved with accuracy: {val_acc:.3f} at epoch {e}")
+            if val_metric > max_metric:
+                max_metric = val_metric
+                if e > 15:
+                    torch.save(
+                        {
+                            "model_state_dict": self.model.state_dict(),
+                            "epoch": e,
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "loss": val_loss,
+                        },
+                        name_model,
+                    )
+                    print(f"Model saved with accuracy: {val_metric:.3f} at epoch {e}")
+                else:
+                    print(f"Max accuracy so far: {val_metric:.3f} at epoch {e}")
 
             if reduce_lr:
                 # scheduler.step(val_acc)
                 scheduler.step(val_loss)
+            elif cosine_annealing:
+                scheduler.step()
 
             if e % print_every == 0:
                 print(
-                    f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_acc:.3f} | Val loss: {val_loss:.5f} | Acc: {val_acc:.3f}"
+                    f"Epoch {e+0:03}: | Loss: {train_loss:.5f} | Acc: {train_metric:.3f} | Val loss: {val_loss:.5f} | Acc: {val_metric:.3f}"
                 )
 
         # return the losses and accuracies
         return {"train": train_losses, "val": val_losses}, {
-            "train": train_accuracies,
-            "val": val_accuracies,
+            "train": train_metrics,
+            "val": val_metrics,
         }
 
     def test_model(self, X_test, batch_size=64):
@@ -409,7 +426,7 @@ class TrainTestNetwork:
             n_losses.append(losses)
             n_accuracies.append(accuracies)
 
-            print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .2f}\n")
+            print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .4f}\n")
 
         return n_losses, n_accuracies
 
