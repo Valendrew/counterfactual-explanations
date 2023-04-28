@@ -9,3 +9,6 @@ kaggle.json
 
 ### Avoid old files ###
 *.old.*
+
+### Avoid log files ###
+*.log

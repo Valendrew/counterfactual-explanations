@@ -3,7 +3,7 @@ import pandas as pd
 import dice_ml
 
 # user imports
-from util_counterfactual import BaseCounterfactual
+from utils.util_base_cf import BaseCounterfactual
 
 
 class DiceCounterfactual(BaseCounterfactual):
@@ -13,7 +13,7 @@ class DiceCounterfactual(BaseCounterfactual):
     """
 
     def __init__(
-        self, model, backend: str, data: pd.DataFrame, cont_feat: list[str], target: str
+        self, model, backend: str, X: pd.DataFrame, y: pd.DataFrame, feature_props: dict, target: str
     ):
         """
         Parameters:
@@ -22,18 +22,20 @@ class DiceCounterfactual(BaseCounterfactual):
             It's the model to use for counterfactuals (torch, sklearn or tensorflow).
         backend: str
             A string between 'sklearn', 'TF1', 'TF2' and 'PYT'.
-        data: pd.DataFrame
-            The data used from Dice for statistics.
-        cont_feat: list[str]
-            The list of names of continuous features.
+        X: pd.DataFrame
+            The dataframe with the data.
+        y: pd.DataFrame
+            The dataframe with the target.
+        feature_props: dict
+            The dictionary with the feature properties.
         target: str
             The name of the target feature.
         """
         dice_mod = dice_ml.Model(model=model, backend=backend)
-        super().__init__(dice_mod, cont_feat)
+        super().__init__(dice_mod, X, y, feature_props)
 
         self.data = dice_ml.Data(
-            dataframe=data, continuous_features=cont_feat, outcome_name=target
+            dataframe=pd.concat([X, y], axis=1), continuous_features=X.columns.to_list(), outcome_name=target
         )
         self.target = target
         self.backend = backend
