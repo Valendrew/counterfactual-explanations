@@ -8,7 +8,7 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import HuberRegressor, LinearRegression
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, balanced_accuracy_score
 
 from typing import Callable
 import math
@@ -221,7 +221,6 @@ class LightGBM:
             print("ERROR: the selected kind of chart is not available.")
 
 
-from sklearn.metrics import balanced_accuracy_score
 
 def multi_acc(y_pred, y_test=None):
     y_pred_softmax = torch.log_softmax(y_pred, dim=1)
@@ -474,12 +473,28 @@ def compare_models(X, y, models, model_names, rng):
     return X_test, y_test, y_preds
 
 
-def evaluate_sample(model, sample_idx, y_idx, device=torch.device("cpu"), verbose=True):
-    '''
-    It evaluates a given sample, running the model on it and computing
-    the logits, the softmax, the predicted class and the marginal softmax.
-    I returns a warning if sample_idx predicted label is different from y_idx.
-    '''
+def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, device=torch.device("cpu"), verbose=True) -> int:
+    """It evaluates a given sample, running the model on it and computing the logits, the softmax,
+    the predicted class and the marginal softmax. It returns a warning if sample_idx predicted label is different from y_idx.
+
+    Parameters
+    ----------
+    model : 
+        Neural network model
+    sample_idx : pd.Series
+        Sample to evaluate
+    y_idx : int
+        True label of the sample
+    device : _type_, optional
+        Device to run the model on, by default torch.device("cpu")
+    verbose : bool, optional
+        Whether to print, by default True
+
+    Returns
+    -------
+    int
+        Predicted label
+    """    
     vprint = print if verbose else lambda *args, **kwargs: None
     model.eval()
     with torch.no_grad():
@@ -510,7 +525,7 @@ def evaluate_sample(model, sample_idx, y_idx, device=torch.device("cpu"), verbos
         else:
             vprint("The predicted class for the sample is equal to the groundtruth.")
         
-    return y_pred.item()
+    return int(y_pred.item())
 
 
 def get_correct_wrong_predictions(model, X, y, device=torch.device('cpu')):
