@@ -17,6 +17,7 @@ import tempfile
 
 # user imports
 from utils.util_base_cf import BaseCounterfactual
+from utils import util_models
 
 ##############################################
 # Functions to compute the OMLT objectives
@@ -53,6 +54,40 @@ def features_constraints(pyo_model, feature_props: dict):
         pyo_model.nn.inputs[idx].bounds = info["bounds"]
 
 
+def features_discrete_values(pyo_model, feature_props: dict):
+    discrete_features = [(i, info["discrete"]) for i, info in enumerate(feature_props.values()) if info.get("discrete") is not None]
+    sum_features = sum((len(f[1]) for f in discrete_features))
+
+    start_indexes = [0]
+    for idx, (_, feat) in enumerate(discrete_features):
+        if idx == len(discrete_features) - 1:
+            continue
+        start_indexes.append(start_indexes[-1] + len(feat))
+
+    print(f"Length: {len(discrete_features)}")
+    print(f"Sum of lengths: {sum_features}")
+    print(f"Start indexes: {start_indexes}")
+
+    pyo_model.n_discrete_set = pyo.RangeSet(0, sum_features - 1)
+    pyo_model.discrete_set = pyo.RangeSet(0, len(discrete_features) - 1)
+
+    pyo_model.discrete_q = pyo.Var(pyo_model.n_discrete_set, domain=pyo.Binary)
+
+
+    def discrete_sum_rule(model, i):
+        return sum(model.discrete_q[j + start_indexes[i]] for j in range(len(discrete_features[i][1]))) == 1
+
+    pyo_model.discrete_constr_sum = pyo.Constraint(pyo_model.discrete_set, rule=discrete_sum_rule)
+
+    def discrete_input_rule(model, i):
+        return model.nn.inputs[discrete_features[i][0]] == sum(
+            discrete_features[i][1][j] * model.discrete_q[j + start_indexes[i]]
+            for j in range(len(discrete_features[i][1]))
+        )
+
+    pyo_model.discrete_constr_input = pyo.Constraint(pyo_model.discrete_set, rule=discrete_input_rule)
+
+
 def compute_obj_1_marginal_softmax(
     pyo_model, cf_class: int, num_classes: int, min_probability: float
 ):
@@ -86,7 +121,7 @@ def compute_obj_1_marginal_softmax(
     pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
     pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
 
-    l, u = (0, 10)
+    l, u = (-min_probability - 1e-2, 3)
 
     # set dummy parameters here to avoid warning message from Pyomo
     pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
@@ -206,9 +241,9 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
     # Variables to handle the values
     pyo_model.b_o3 = pyo.Var(feat_set, domain=pyo.Binary, initialize=0)
     pyo_model.sum_o3 = pyo.Var(
-        domain=pyo.NonNegativeIntegers, bounds=(0, num_feat), initialize=0
+        domain=pyo.NonNegativeIntegers, bounds=(0, 1), initialize=0
     )
-    pyo_model.diff_o3 = pyo.Var(feat_set, domain=pyo.Reals, initialize=0)
+    pyo_model.diff_o3 = pyo.Var(feat_set, domain=pyo.NonNegativeReals, initialize=0)
     # Constraints for the if then else
     pyo_model.constr_diff_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_less_o3 = pyo.Constraint(feat_set)
@@ -232,7 +267,7 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
     pyo_model.constr_sum_o3 = pyo_model.sum_o3 == sum(
         [pyo_model.b_o3[i] for i in range(num_feat)]
     )
-    return pyo_model.sum_o3
+    return pyo_model.sum_o3 / num_feat
 
 
 def limit_counterfactual(pyo_model, sample, features, pyo_info):
@@ -376,7 +411,7 @@ class OmltCounterfactual(BaseCounterfactual):
         sample: np.ndarray,
         cf_class: int,
         min_probability: float,
-        objective_weights=[1, 1, 1],
+        objective_weights=[0, 0, 0],
     ):
         """
         It computes the objective functions to optimize to generate the counterfactuals.
@@ -405,6 +440,8 @@ class OmltCounterfactual(BaseCounterfactual):
 
         # Set the domain and bounds for each feature of the counterfactual
         features_constraints(self.pyo_model, self.feature_props)
+
+        features_discrete_values(self.pyo_model, self.feature_props)
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
@@ -446,7 +483,7 @@ class OmltCounterfactual(BaseCounterfactual):
         )
 
         # Set the objective function
-        self.pyo_model.obj = pyo.Objective(expr=final_obj)
+        self.pyo_model.obj = pyo.Objective(expr=final_obj, sense=pyo.minimize)
 
     def generate_counterfactuals(
         self,
@@ -484,6 +521,17 @@ class OmltCounterfactual(BaseCounterfactual):
         --------
         pd.DataFrame:
             A dataframe with the counterfactual sample.
+        
+        Raises:
+        -------
+        AssertionError:
+            If the sample is not a dataframe or if it contains more than one sample.
+
+        AssertionError:
+            If the solver is not supported.
+s
+        ValueError:
+            If the prediction of the sample is not the same as the cf_class.        
         """
         # Check the input
         assert isinstance(df_sample, pd.DataFrame), "The sample must be a dataframe."
@@ -533,6 +581,13 @@ class OmltCounterfactual(BaseCounterfactual):
         self.start_samples = sample
         # Convert the pyomo solution to a dataframe
         counterfactual_sample = list(self.pyo_model.nn.inputs.get_values().values())
+        
+        vprint(f"Counterfactual sample: {counterfactual_sample}")
+        # Check if some features have changed only by a small amount
+        for i, feat in enumerate(self.X.columns):
+            if abs(counterfactual_sample[i] - sample[i]) < 1e-3:
+                counterfactual_sample[i] = sample[i]
+
         counterfactual_df = pd.DataFrame(
             np.array(counterfactual_sample, ndmin=2),
             columns=self.X.columns,
@@ -542,6 +597,16 @@ class OmltCounterfactual(BaseCounterfactual):
         logit_dict = self.pyo_model.nn.outputs.get_values()
         out_label = max(logit_dict, key=logit_dict.get)
         counterfactual_df["misc_price"] = out_label
+
+        # Inference the counterfactual
+        y_cf_pred = util_models.evaluate_sample(
+            self.model, pd.Series(counterfactual_sample, index=self.X.columns), cf_class, verbose=verbose
+        )
+        vprint(f"Counterfactual predicted class: {y_cf_pred}")
+        if y_cf_pred != cf_class:
+            raise ValueError(
+                f"Counterfactual predicted class is {y_cf_pred} instead of {cf_class}."
+            )
 
         self.CFs = [counterfactual_df]
         return counterfactual_df

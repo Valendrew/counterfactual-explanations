@@ -2,6 +2,7 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
 
 # user imports
 from utils.util_dice import DiceCounterfactual
@@ -33,6 +34,46 @@ def get_counterfactual_class(initial_class: int, num_classes: int, lower=True):
         return initial_class - counterfactual_op
     return initial_class + counterfactual_op
 
+def generate_counterfactual(sample: pd.Series, sample_label: int, target_column: str, type_cf: str, cf_model, pipeline, **kwargs_cf):
+    # Check all parameters are of the correct type
+    assert isinstance(sample, pd.Series)
+    assert isinstance(sample_label, int)
+    assert isinstance(target_column, str)
+    assert isinstance(type_cf, str)
+    assert isinstance(pipeline, ColumnTransformer) or pipeline is None
+
+    # Create a dataframe from the sample and add the label
+    sample = sample.to_frame().T
+    sample.loc[:, target_column] = sample_label
+
+    # Get the counterfactual class
+    if type_cf in ["lower", "increase"]:
+        lower_cf = True if type_cf == "lower" else False
+        type_cf_value = get_counterfactual_class(sample_label, 3, lower_cf)
+    elif type_cf == "same":
+        type_cf_value = sample_label
+    else:
+        raise ValueError(f"Counterfactual type '{type_cf}' not recognized as valid. Please use 'lower', 'increase' or 'same'.")
+    
+    # Generate the counterfactuals
+    try:
+        cf = cf_model.generate_counterfactuals(sample, type_cf_value, **kwargs_cf)
+    except Exception as e:
+        print(f"ERROR: the counterfactuals could not be generated. Error: {e}")
+        return None
+
+    # Denormalize the counterfactuals
+    if pipeline is not None:
+        pairs = cf_model.destandardize_cfs_orig(pipeline=pipeline)
+    else:
+        print(
+            "WARNING: the pipeline is not passed, therefore only the found counterfactual will be returned."
+        )
+        return cf
+
+    compare_dfs = cf_model.compare_sample_cf(pairs)
+
+    return compare_dfs
 
 def generate_counterfactual_from_sample(
     model,
@@ -42,10 +83,10 @@ def generate_counterfactual_from_sample(
     sample: pd.DataFrame,
     sample_label: int,
     feature_props: dict,
-    type_cf="lower",
-    backend="PYT",
-    target_column="misc_price",
-    dice_method="random",
+    type_cf,
+    target_column,
+    backend=None,
+    dice_method=None,
     pipeline=None,
     **kwargs_cf,
 ) -> Union[pd.DataFrame, list[pd.DataFrame]]:
@@ -96,6 +137,9 @@ def generate_counterfactual_from_sample(
     if cf_type == "omlt":
         cf_model = OmltCounterfactual(X_train, y_train, model, feature_props)
     elif cf_type == "dice":
+        assert backend is not None
+        assert dice_method is not None
+
         df_dice = pd.concat([X_train, y_train], axis=1)
         # We need to pass all the features as numerical
         cont_feat = list(X_train.columns)
@@ -107,28 +151,69 @@ def generate_counterfactual_from_sample(
     else:
         raise Exception("Counterfactual class not recognized.")
 
-    sample.loc[:, target_column] = sample_label
+    return generate_counterfactual(
+        sample,
+        sample_label,
+        target_column,
+        type_cf,
+        cf_model,
+        pipeline,
+        **kwargs_cf,
+    )
 
-    # Get the counterfactual class
-    if type_cf in ["lower", "increase"]:
-        lower_cf = True if type_cf == "lower" else False
-        cf_type = get_counterfactual_class(sample_label, 3, lower_cf)
-    elif type_cf == "same":
-        cf_type = sample_label
-    else:
-        raise Exception("Counterfactual class not recognized.")
+def generate_counterfactuals_from_sample_list(
+    model,
+    cf_type: str,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    sample_list: pd.DataFrame,
+    label_list: pd.Series,
+    feature_props: dict,
+    type_cf,
+    target_column,
+    backend=None,
+    dice_method=None,
+    pipeline=None,
+    **kwargs_cf,
+) -> pd.DataFrame:
+    if len(sample_list) != len(label_list):
+        raise ValueError("The sample list and the label list must have the same length.")
+    
+    # Initialize a counterfactual model
+    if cf_type == "omlt":
+        cf_model = OmltCounterfactual(X_train, y_train, model, feature_props)
+    elif cf_type == "dice":
+        assert backend is not None
+        assert dice_method is not None
 
-    # Generate the counterfactuals
-    cf = cf_model.generate_counterfactuals(sample, cf_type, **kwargs_cf)
+        df_dice = pd.concat([X_train, y_train], axis=1)
+        # We need to pass all the features as numerical
+        cont_feat = list(X_train.columns)
 
-    # Denormalize the counterfactuals
-    if pipeline is not None:
-        pairs = cf_model.destandardize_cfs_orig(pipeline=pipeline)
-    else:
-        print(
-            "WARNING: the pipeline is not passed, therefore only the found counterfactual will be returned."
+        cf_model = DiceCounterfactual(
+            model, backend, df_dice, cont_feat, target=target_column
         )
-        return cf
+        cf_model.create_explanation_instance(method=dice_method)
+    else:
+        raise ValueError(f"Counterfactual class '{cf_type}' not recognized. Please use 'omlt' or 'dice'.")
 
-    compare_dfs = cf_model.compare_sample_cf(pairs)
-    return compare_dfs
+    cfs_generated = pd.DataFrame()
+    for idx, i in enumerate(sample_list.index):
+        if i not in label_list.index:
+            raise ValueError(f"The index '{i}' of the sample list is not present in the label list.")
+
+        print(f"[{idx}] Generating counterfactual for sample {i}.")
+        cfs = generate_counterfactual(
+            sample_list.loc[i],
+            int(label_list.loc[i]),
+            target_column,
+            type_cf,
+            cf_model,
+            pipeline,
+            **kwargs_cf,
+        )
+        if cfs is not None:
+            sample_generated = cfs[0].T.loc["Counterfactual_0"].rename(i)
+            cfs_generated = pd.concat([cfs_generated, sample_generated], axis=1)
+
+    return cfs_generated
