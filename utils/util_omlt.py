@@ -1,3 +1,6 @@
+# python imports
+import time
+
 # 3d party imports
 import numpy as np
 import pandas as pd
@@ -23,6 +26,9 @@ from utils import util_models
 # Functions to compute the OMLT objectives
 ##############################################
 
+class SolverException(Exception):
+    pass
+
 
 def handmade_softmax(input, n_class, real_class):
     """
@@ -42,11 +48,31 @@ def features_constraints(pyo_model, feature_props: dict):
     Set the bounds and the domain for each features given a dictionary that
     contains the bounds as a tuple, the domain as a pyomo domain and the position
     of the feature in the columns.
+
+    Parameters:
+    -----------
+    pyo_model:
+        The pyomo model to consider.
+    feature_props: dict
+        A dictionary that contains the bounds as a tuple and the domain of the
+        feature as either 'continuous' or 'categorical'.
+
+    Raises:
+    -------
+    ValueError:
+        If the type of the feature is not valid.
     """
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(feature_props, dict), "feature_props must be a dictionary"
+
+    # Iterate over the features and set the bounds and the domain
     for idx, info in enumerate(feature_props.values()):
         if info["type"] == "categorical":
+            # Categorical features are encoded as non-negative integers
             pyo_model.nn.inputs[idx].domain = pyo.NonNegativeIntegers
         elif info["type"] == "continuous":
+            # Continuous features are encoded as real numbers
             pyo_model.nn.inputs[idx].domain = pyo.Reals
         else:
             raise ValueError("The type of the feature is not valid.")
@@ -55,29 +81,56 @@ def features_constraints(pyo_model, feature_props: dict):
 
 
 def features_discrete_values(pyo_model, feature_props: dict):
-    discrete_features = [(i, info["discrete"]) for i, info in enumerate(feature_props.values()) if info.get("discrete") is not None]
+    """Generate the constraints for the discrete features.
+
+    Parameters
+    ----------
+    pyo_model :
+        The pyomo model to consider.
+    feature_props : dict
+        A dictionary that contains the properties of the features. Only
+        the discrete features are considered.
+    """
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(feature_props, dict), "feature_props must be a dictionary"
+
+    # Get the discrete features as a list of tuples (index, values)
+    discrete_features = [
+        (i, info["discrete"])
+        for i, info in enumerate(feature_props.values())
+        if info.get("discrete") is not None
+    ]
+    # Sum the number of discrete values among all the features
     sum_features = sum((len(f[1]) for f in discrete_features))
 
+    # Compute the start indexes for each feature
     start_indexes = [0]
     for idx, (_, feat) in enumerate(discrete_features):
         if idx == len(discrete_features) - 1:
             continue
         start_indexes.append(start_indexes[-1] + len(feat))
 
-    print(f"Length: {len(discrete_features)}")
-    print(f"Sum of lengths: {sum_features}")
-    print(f"Start indexes: {start_indexes}")
-
+    # Set the discrete set
     pyo_model.n_discrete_set = pyo.RangeSet(0, sum_features - 1)
     pyo_model.discrete_set = pyo.RangeSet(0, len(discrete_features) - 1)
 
+    # Set the discrete variables
     pyo_model.discrete_q = pyo.Var(pyo_model.n_discrete_set, domain=pyo.Binary)
 
-
+    # Set the constraints
     def discrete_sum_rule(model, i):
-        return sum(model.discrete_q[j + start_indexes[i]] for j in range(len(discrete_features[i][1]))) == 1
+        return (
+            sum(
+                model.discrete_q[j + start_indexes[i]]
+                for j in range(len(discrete_features[i][1]))
+            )
+            == 1
+        )
 
-    pyo_model.discrete_constr_sum = pyo.Constraint(pyo_model.discrete_set, rule=discrete_sum_rule)
+    pyo_model.discrete_constr_sum = pyo.Constraint(
+        pyo_model.discrete_set, rule=discrete_sum_rule
+    )
 
     def discrete_input_rule(model, i):
         return model.nn.inputs[discrete_features[i][0]] == sum(
@@ -85,7 +138,9 @@ def features_discrete_values(pyo_model, feature_props: dict):
             for j in range(len(discrete_features[i][1]))
         )
 
-    pyo_model.discrete_constr_input = pyo.Constraint(pyo_model.discrete_set, rule=discrete_input_rule)
+    pyo_model.discrete_constr_input = pyo.Constraint(
+        pyo_model.discrete_set, rule=discrete_input_rule
+    )
 
 
 def compute_obj_1_marginal_softmax(
@@ -110,7 +165,11 @@ def compute_obj_1_marginal_softmax(
     --------
         It returns the pyomo variable that contains the value to optimize.
     """
-    # prob_y = lambda x: handmade_softmax(x, num_classes, cf_class)
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert type(cf_class) in [int, np.int32, np.int64], "cf_class must be an integer"
+    assert isinstance(num_classes, int), "num_classes must be an integer"
+    assert isinstance(min_probability, float), "min_probability must be a float"
 
     # something
     pyo_model.obj1_q_relu = pyo.Var(within=pyo.Binary, initialize=0)
@@ -134,7 +193,9 @@ def compute_obj_1_marginal_softmax(
         within=pyo.NonNegativeReals, bounds=(0, u), initialize=0
     )
     # define variable for marginal softmax
-    pyo_model.obj1_marginal_softmax = pyo.Var(bounds=(l, u), initialize=0)
+    pyo_model.obj1_marginal_softmax = pyo.Var(
+        bounds=(0, u), initialize=0, within=pyo.NonNegativeReals
+    )
 
     # Constraints the marginal softmax
     def softmax_constr_rule(m):
@@ -190,14 +251,27 @@ def gower_distance(
     Returns
     -------
     It returns the pyomo variable that contains the sum to minimize.
+
+    Raises
+    ------
+    ValueError
+        If the type of the features is not valid.
     """
-    ub_ranges = 0  # Upper bound of the range
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(x, np.ndarray), "x must be a numpy array"
+    assert isinstance(
+        feat_ranges, pd.DataFrame
+    ), "feat_ranges must be a pandas dataframe"
+    assert isinstance(feat_props, dict), "feat_props must be a dictionary"
+
+    # Compute
     sum_distances = 0  # Sum of the distances
     for i, props in enumerate(feat_props.values()):
+        # Get the range of the feature and the weight of the feature
         range_i = (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2
         weights_i = props.get("weight", 1)
 
-        ub_ranges += range_i
         # TODO replace euclidean distance with absolute distance
         if props["type"] == "categorical":
             # TODO should we use the same distance for categorical features?
@@ -212,9 +286,13 @@ def gower_distance(
             raise ValueError("The type of feature is not valid.")
 
     # Feature variables and constraints
-    pyo_model.obj2_sum = pyo.Var(domain=pyo.Reals, bounds=(0, ub_ranges), initialize=0)
+    num_features = len(x)
+
+    pyo_model.obj2_sum = pyo.Var(
+        domain=pyo.Reals, bounds=(0, num_features), initialize=0
+    )
     pyo_model.obj2_sum_constr = pyo.Constraint(expr=pyo_model.obj2_sum == sum_distances)
-    return pyo_model.obj2_sum / len(x)
+    return pyo_model.obj2_sum / num_features
 
 
 def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
@@ -235,9 +313,17 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
     --------
     It returns the pyomo variable that represents the number of changed variables.
     """
-    num_feat = len(sample)
+    # TODO TO FINISH
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(sample, np.ndarray), "sample must be a numpy array"
+    assert isinstance(
+        feat_ranges, pd.DataFrame
+    ), "feat_ranges must be a pandas dataframe"
+
+    num_features = len(sample)
     # Set of indexes for the features
-    feat_set = pyo.Set(initialize=range(0, num_feat))
+    feat_set = pyo.Set(initialize=range(0, num_features))
     # Variables to handle the values
     pyo_model.b_o3 = pyo.Var(feat_set, domain=pyo.Binary, initialize=0)
     pyo_model.sum_o3 = pyo.Var(
@@ -250,7 +336,7 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
     pyo_model.constr_great_o3 = pyo.Constraint(feat_set)
     pyo_model.constr_sum_o3 = pyo.Constraint()
 
-    for i in range(num_feat):
+    for i in range(num_features):
         range_i = (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2
         threshold = 1e-3
 
@@ -265,9 +351,9 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
             pyo_model.b_o3[i] * range_i
         )
     pyo_model.constr_sum_o3 = pyo_model.sum_o3 == sum(
-        [pyo_model.b_o3[i] for i in range(num_feat)]
+        [pyo_model.b_o3[i] for i in range(num_features)]
     )
-    return pyo_model.sum_o3 / num_feat
+    return pyo_model.sum_o3 / num_features
 
 
 def limit_counterfactual(pyo_model, sample, features, pyo_info):
@@ -287,6 +373,11 @@ def limit_counterfactual(pyo_model, sample, features, pyo_info):
         The dictionary that contains information about the features.
 
     """
+    # TODO TO FINISH
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(sample, np.ndarray), "sample must be a numpy array"
+
     if features is None or len(features) < 1:
         return None
 
@@ -330,6 +421,13 @@ class OmltCounterfactual(BaseCounterfactual):
         categorical_bounds: str or tuple, optional
             Bounds to use for the categorical features. Defaults to "min-max".
         """
+        # Assert all the parameters are of the correct type
+        assert isinstance(X, pd.DataFrame), "X must be a pandas dataframe"
+        assert isinstance(y, pd.Series), "y must be a pandas series"
+        assert isinstance(
+            feature_props, dict
+        ), "feature_props must be a dictionary with the features properties"
+
         super().__init__(nn_model, X, y, feature_props)
 
         self.num_classes = self.y.nunique()
@@ -339,7 +437,7 @@ class OmltCounterfactual(BaseCounterfactual):
         # Check if the solvers are available in the system
         self.__check_available_solvers()
         # Create the network formulation
-        self.__create_network_formulation(-1, 1)
+        self.__create_network_formulation(-1.0, 1.0)
 
     def __check_available_solvers(self):
         """
@@ -347,11 +445,11 @@ class OmltCounterfactual(BaseCounterfactual):
 
         Raises:
         -------
-        Exception: If the solver is not available.
+        ValueError: If the solver is not available.
         """
         for solver in self.AVAILABLE_SOLVERS.values():
             if not pyo.SolverFactory(solver).available():
-                raise Exception("The solver {} is not available.".format(solver))
+                raise ValueError("The solver {} is not available.".format(solver))
 
     def __create_network_formulation(self, lb: float, ub: float):
         """
@@ -365,17 +463,21 @@ class OmltCounterfactual(BaseCounterfactual):
         ub: float
             Upper bound for the input features.
         """
+        # Assert all the parameters are of the correct type
+        assert isinstance(lb, float), "The lower bound must be a float."
+        assert isinstance(ub, float), "The upper bound must be a float."
+
         # Create a dummy sample to export the model
         num_features = self.X.shape[1]
         dummy_sample = torch.zeros(size=(1, num_features), dtype=torch.float)
         # Set bound arrays by repeating the bounds for each feature
-        lb = np.repeat(lb, num_features)
-        ub = np.repeat(ub, num_features)
+        lb_values = np.repeat(lb, num_features)
+        ub_values = np.repeat(ub, num_features)
 
         # Set the bounds for each feature
         input_bounds = {}
         for i in range(num_features):
-            input_bounds[i] = (float(lb[i]), float(ub[i]))
+            input_bounds[i] = (float(lb_values[i]), float(ub_values[i]))
 
         with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
             # Export neural network to ONNX
@@ -411,7 +513,8 @@ class OmltCounterfactual(BaseCounterfactual):
         sample: np.ndarray,
         cf_class: int,
         min_probability: float,
-        objective_weights=[0, 0, 0],
+        objective_weights: list[float],
+        verbose: bool
     ):
         """
         It computes the objective functions to optimize to generate the counterfactuals.
@@ -431,33 +534,55 @@ class OmltCounterfactual(BaseCounterfactual):
             The weights for the categorical features in the Gower distance.
         cont_weights: list, optional
             The weights for the continuous features in the Gower distance.
-        fixed_features: list, optional
-            List of features which are fixed. Defaults to [].
+        fixed_features: list
+            List of features which are fixed.
+        verbose: bool
+            If True, it prints the optimization process.
         """
+        # Assert all the parameters are of the correct type
+        assert isinstance(sample, np.ndarray), "The sample must be a numpy array."
+        assert type(cf_class) in [
+            np.int64,
+            np.int32,
+            int,
+        ], "The cf_class must be an integer."
+        assert isinstance(min_probability, float) and (
+            min_probability >= 0
+        ), "The minimum probability must be a float greater or equal to 0."
+        assert isinstance(
+            objective_weights, list
+        ), "The objective weights must be a list."
+        assert isinstance(verbose, bool), "The verbose must be a boolean."
+
         assert (
             len(objective_weights) == self.SUPPORTED_OBJECTIVES
         ), "The number of objectives is not correct."
 
+        # Verbose print
+        vprint = print if verbose else lambda *a, **k: None
+
         # Set the domain and bounds for each feature of the counterfactual
         features_constraints(self.pyo_model, self.feature_props)
 
+        # Set the discrete values for some numerical features
         features_discrete_values(self.pyo_model, self.feature_props)
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
-            raise Exception("Objective 1 must be computed.")
+            raise ValueError("Objective 1 must be computed.")
         else:
             obj_1 = compute_obj_1_marginal_softmax(
                 self.pyo_model, cf_class, self.num_classes, min_probability
             )
 
-        # OBJECTIVE 2 - generate counterfactual with limited distances from original features
+        # Define the ranges of the features in a dataframe
         feat_ranges = pd.concat([self.X.min(), self.X.max()], axis=1).rename(
             columns={0: "min", 1: "max"}
         )
 
+        # OBJECTIVE 2 - generate counterfactual with limited distances from original features
         if objective_weights[1] == 0:
-            print(f"Objective 2 is set to 0, so the Gower distance will be 0")
+            vprint(f"Objective 2 is set to 0, so the Gower distance will be 0")
             gower_dist = 1
         else:
             gower_dist = gower_distance(
@@ -467,7 +592,7 @@ class OmltCounterfactual(BaseCounterfactual):
         # OBJECTIVE 3 -  change the minimum number of features
         if objective_weights[2] == 0:
             obj_3 = 1
-            print(
+            vprint(
                 f"Objective 3 is set to 0, so the number of changed features is not minimized."
             )
         else:
@@ -490,10 +615,10 @@ class OmltCounterfactual(BaseCounterfactual):
         df_sample: pd.DataFrame,
         cf_class: int,
         min_probability: float,
-        obj_weights=[1, 1, 1],
-        solver="mindtpy",
-        solver_options={},
-        verbose=True,
+        obj_weights: list[float],
+        solver: str,
+        solver_options: dict,
+        verbose: bool,
     ) -> pd.DataFrame:
         """
         It generates the counterfactual for a given sample, considering the passed
@@ -508,34 +633,51 @@ class OmltCounterfactual(BaseCounterfactual):
         min_probability: float
             Minimum probability of the softmax output.
         obj_weights: list, optional
-            Weights of the objectives. Defaults to [1, 1, 1].
+            Weights of the objectives.
         solver: str
             The solver to use for computing the solution, one between 'mindtpy' and 'multistart'.
             In the case of 'mindtpy', cplex and ipopt will be used, in the other case only ipopt.
         solver_options: dict, optional
-            Options for the solver. Defaults to {}.
+            Options for the solver.
         verbose: bool, optional
-            Verbose mode for the solver. Defaults to True.
+            Verbose mode for the solver.
 
         Returns:
         --------
         pd.DataFrame:
             A dataframe with the counterfactual sample.
-        
+
         Raises:
         -------
-        AssertionError:
-            If the sample is not a dataframe or if it contains more than one sample.
-
-        AssertionError:
-            If the solver is not supported.
-s
         ValueError:
-            If the prediction of the sample is not the same as the cf_class.        
+            If the solver is not supported. Only 'mindtpy' and 'multistart' are supported.
+        ValueError:
+            If the prediction of the sample is not the same as the cf_class.
+        SolverException:
+            If the solver does not find a solution.
         """
-        # Check the input
+        # Assert all the parameters are of the correct type
         assert isinstance(df_sample, pd.DataFrame), "The sample must be a dataframe."
+        assert type(cf_class) in [
+            np.int64,
+            np.int32,
+            int,
+        ], "The cf_class must be an integer."
+        assert isinstance(min_probability, float) and (
+            min_probability >= 0
+        ), "The minimum probability must be a float greater or equal to 0."
+        assert isinstance(obj_weights, list), "The obj_weights must be a list."
+        assert isinstance(solver, str), "The solver must be a string."
+        assert isinstance(
+            solver_options, dict
+        ), "The solver_options must be a dictionary."
+        assert isinstance(verbose, bool), "The verbose must be a boolean."
+        # Check the input sample has only one row
         assert df_sample.shape[0] == 1, "Only one sample at a time is supported."
+
+        # Verbose print function
+        vprint = print if verbose else lambda *args, **kwargs: None
+
         sample: np.ndarray = df_sample.values[0]
 
         # Reset the pyomo model
@@ -546,26 +688,28 @@ s
             cf_class,
             min_probability,
             obj_weights,
+            verbose
         )
 
-        assert solver in [
-            "mindtpy",
-            "multistart",
-        ], "The selected solver is not available, choose between 'mindtpy' and 'multistart'."
         # Set the solver to mindtpy
         solver_factory = pyo.SolverFactory(solver)
 
-        vprint = print if verbose else lambda *args, **kwargs: None
-
+        # Set the solver options and solve the problem
+        start_time = time.time()
         if solver == "mindtpy":
-            pyo_solution = solver_factory.solve(
-                self.pyo_model,
-                tee=verbose,
-                time_limit=solver_options["timelimit"],
-                mip_solver=self.AVAILABLE_SOLVERS["mip"],
-                nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
-            )
-        else:
+            # TODO replace false with verbose
+            try:
+                pyo_solution = solver_factory.solve(
+                    self.pyo_model,
+                    tee=False,
+                    time_limit=solver_options["timelimit"],
+                    mip_solver=self.AVAILABLE_SOLVERS["mip"],
+                    nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
+                )
+            except ValueError as e:
+                raise SolverException(e)
+
+        elif solver == "multistart":
             vprint("\nStarting the search for a counterfactual ...")
             pyo_solution = solver_factory.solve(
                 self.pyo_model,
@@ -574,15 +718,21 @@ s
                 strategy=solver_options["strategy"],
             )
             vprint("The counterfactual has been generated!\n")
+        else:
+            raise ValueError(
+                "The selected solver is not available, choose between 'mindtpy' and 'multistart'."
+            )
+        end_time = time.time()
+        vprint(f"Time elapsed: {end_time - start_time}")
+        vprint(f"Solver status: {pyo_solution.solver.status}")
 
-        # Check the value of the objective function
+        # Save the pyomo model to a file
         self.pyo_model.pprint(open("./pyomo_model.log", "w"))
 
         self.start_samples = sample
         # Convert the pyomo solution to a dataframe
         counterfactual_sample = list(self.pyo_model.nn.inputs.get_values().values())
-        
-        vprint(f"Counterfactual sample: {counterfactual_sample}")
+
         # Check if some features have changed only by a small amount
         for i, feat in enumerate(self.X.columns):
             if abs(counterfactual_sample[i] - sample[i]) < 1e-3:
@@ -593,20 +743,21 @@ s
             columns=self.X.columns,
             index=df_sample.index,
         )
-        # Find the predicted label for the counterfactual
-        logit_dict = self.pyo_model.nn.outputs.get_values()
-        out_label = max(logit_dict, key=logit_dict.get)
-        counterfactual_df["misc_price"] = out_label
 
-        # Inference the counterfactual
+        # Inference the counterfactual to check if it is valid
+        counterfactual_series = pd.Series(counterfactual_sample, index=self.X.columns)
         y_cf_pred = util_models.evaluate_sample(
-            self.model, pd.Series(counterfactual_sample, index=self.X.columns), cf_class, verbose=verbose
+            self.model,
+            counterfactual_series,
+            cf_class,
+            verbose=verbose,
         )
         vprint(f"Counterfactual predicted class: {y_cf_pred}")
         if y_cf_pred != cf_class:
             raise ValueError(
                 f"Counterfactual predicted class is {y_cf_pred} instead of {cf_class}."
             )
+        counterfactual_df["misc_price"] = cf_class
 
         self.CFs = [counterfactual_df]
         return counterfactual_df
