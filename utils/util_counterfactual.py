@@ -8,18 +8,21 @@ from sklearn.compose import ColumnTransformer
 from utils.util_dice import DiceCounterfactual
 from utils.util_omlt import OmltCounterfactual, SolverException
 
+from dice_ml.model import UserConfigValidationException
+
 ################################
 # Functions for generic usage
 ################################
 
 
-def get_counterfactual_class(initial_class: int, num_classes: int, lower: bool):
+def get_counterfactual_class(initial_class: int, num_classes: int, lower: bool, verbose: bool = True):
     """
     It returns the counterfactual class given the initial class, the number
     of classes and if the counterfactual needs to be lower or higher. The
     function considers only counterfactuals that differs by 1 from the original
     class.
     """
+    vprint = print if verbose else lambda *args, **kwargs: None
     # Check all parameters are of the correct type
     assert type(initial_class) in [np.int64, np.int32, int], "The initial class must be an integer."
     assert type(num_classes) in [np.int64, np.int32, int], "The number of classes must be an integer."
@@ -31,7 +34,7 @@ def get_counterfactual_class(initial_class: int, num_classes: int, lower: bool):
     idx_check = 0 if lower else num_classes - 1
     counterfactual_op = -1 if lower else 1
     if initial_class == idx_check:
-        print(
+        vprint(
             "WARNING: the desired value was out of range, hence the opposite operation has been performed."
         )
         return initial_class - counterfactual_op
@@ -63,24 +66,24 @@ def generate_counterfactual(sample: pd.Series, sample_label: int, target_column:
     Raises
     ------
     ValueError
-        Raised from errors.
+        The type of counterfactual is not recognized.
+    UserConfigValidationException
+        Dice cannot find a counterfactual.
     """    
     # Check all parameters are of the correct type
-    assert isinstance(sample, pd.Series), "The sample must be a pandas series."
-    assert type(sample_label) in [np.int64, np.int32, int], "The sample label must be an integer."
+    assert isinstance(sample, pd.DataFrame), "The sample must be a pandas dataframe."
+    assert type(sample_label) in [np.int64, np.int32, int], "The sample label must be an integer or a pandas series."
     assert isinstance(target_column, str), "The target column must be a string."
     assert isinstance(type_cf, str), "The type of counterfactual must be a string."
     assert isinstance(pipeline, ColumnTransformer) or pipeline is None, "The pipeline must be a ColumnTransformer or None."
     assert isinstance(kwargs_cf, dict), "The kwargs must be a dictionary."
 
-    # Create a dataframe from the sample and add the label
-    sample = sample.to_frame().T
     sample.loc[:, target_column] = sample_label
 
     # Get the counterfactual class
     if type_cf in ["lower", "increase"]:
         lower_cf = True if type_cf == "lower" else False
-        type_cf_value = get_counterfactual_class(sample_label, 3, lower_cf)
+        type_cf_value = get_counterfactual_class(sample_label, 3, lower_cf, False)
     elif type_cf == "same":
         type_cf_value = sample_label
     else:
@@ -88,9 +91,11 @@ def generate_counterfactual(sample: pd.Series, sample_label: int, target_column:
     
     # Generate the counterfactuals
     try:
-        cf = cf_model.generate_counterfactuals(sample, type_cf_value, **kwargs_cf)
+        cf = cf_model.generate_counterfactuals(sample, int(type_cf_value), **kwargs_cf)
     except ValueError as e:
         raise ValueError(e)
+    except UserConfigValidationException as e:
+        raise UserConfigValidationException(e) 
 
     # Denormalize the counterfactuals
     if pipeline is not None:
@@ -173,12 +178,9 @@ def generate_counterfactual_from_sample(
         assert backend is not None
         assert dice_method is not None
 
-        df_dice = pd.concat([X_train, y_train], axis=1)
-        # We need to pass all the features as numerical
-        cont_feat = list(X_train.columns)
-
         cf_model = DiceCounterfactual(
-            model, backend, df_dice, cont_feat, target=target_column
+            model, backend, X_train, y_train, feature_props=feature_props,
+            target=target_column
         )
         cf_model.create_explanation_instance(method=dice_method)
     else:
@@ -264,6 +266,7 @@ def generate_counterfactuals_from_sample_list(
     assert isinstance(pipeline, ColumnTransformer) or pipeline is None, "The pipeline parameter must be a ColumnTransformer or None."
     assert isinstance(kwargs_cf, dict), "The kwargs_cf parameter must be a dictionary."
 
+    vprint = print if kwargs_cf.get('verbose', True) else lambda *args, **kwargs: None
     if len(sample_list) != len(label_list):
         raise ValueError("The sample list and the label list must have the same length.")
     
@@ -274,12 +277,8 @@ def generate_counterfactuals_from_sample_list(
         assert backend is not None
         assert dice_method is not None
 
-        df_dice = pd.concat([X_train, y_train], axis=1)
-        # We need to pass all the features as numerical
-        cont_feat = list(X_train.columns)
-
         cf_model = DiceCounterfactual(
-            model, backend, df_dice, cont_feat, target=target_column
+            model, backend, X_train, y_train, feature_props=feature_props, target=target_column
         )
         cf_model.create_explanation_instance(method=dice_method)
     else:
@@ -288,15 +287,15 @@ def generate_counterfactuals_from_sample_list(
     cfs_generated = pd.DataFrame()
     # Iterate over the samples and generate the counterfactuals
     for idx, i in enumerate(sample_list.index):
-        print(f"[{idx}] Generating counterfactual for sample {i}.")
+        vprint(f"[{idx}] Generating counterfactual for sample {i}.")
         
         if i not in label_list.index:
-            print(f"The index '{i}' of the sample list is not present in the label list.")
+            vprint(f"The index '{i}' of the sample list is not present in the label list.")
             continue
         
         try:
             cfs = generate_counterfactual(
-                sample_list.loc[i],
+                sample_list.loc[[i]],
                 label_list.loc[i],
                 target_column,
                 type_cf,
@@ -305,6 +304,9 @@ def generate_counterfactuals_from_sample_list(
                 **kwargs_cf,
             )
         except ValueError as e:
+            print(e)
+            continue
+        except UserConfigValidationException as e:
             print(e)
             continue
 

@@ -482,7 +482,7 @@ def compare_models(X, y, models, model_names, rng):
     return X_test, y_test, y_preds
 
 
-def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose, device=torch.device("cpu")) -> int:
+def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose=True, device=torch.device("cpu")) -> int:
     """It evaluates a given sample, running the model on it and computing the logits, the softmax,
     the predicted class and the marginal softmax. It returns a warning if sample_idx predicted label is different from y_idx.
 
@@ -505,7 +505,7 @@ def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose, device=to
         Predicted label
     """ 
     # Assert all the parameters are of the correct type
-    assert isinstance(sample_idx, pd.Series), "sample_idx must be a pandas Series"
+    assert isinstance(sample_idx, pd.DataFrame), "sample_idx must be a pandas dataframe"
     assert type(y_idx) in [int, np.int32, np.int64], "y_idx must be an integer"
     assert isinstance(verbose, bool), "verbose must be a boolean"
 
@@ -516,7 +516,7 @@ def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose, device=to
         # if isinstance(sample_idx, pd.DataFrame): 
             # sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
         # else:
-        sample_idx = torch.tensor(sample_idx, dtype=torch.float).view(1, -1).to(device)
+        sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
 
         # inference and print logits
         y_logit = model(sample_idx)
