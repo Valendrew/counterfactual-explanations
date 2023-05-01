@@ -66,10 +66,28 @@ class BaseCounterfactual:
         self.feature_props = dict(sorted(feature_props.items(), key=lambda x: columns.get_loc(x[0])))
         self.start_samples = None
         self.CFs = None
+        self.SUPPORTED_PROPERTIES = ["type", "weight", "bounds", "discrete"]
 
-    def get_property_values(self):
-        # TODO implement the function or remove it
-        pass
+    def get_property_values(self, feature: str, default_value=None) -> list:
+        """Get the values of the given feature from the feature_props dict.
+
+        Parameters
+        ----------
+        feature : str
+            The feature to get the values from.
+        default_value : str, optional
+            The default value to return if the feature is not present, by default None
+
+        Returns
+        -------
+        list
+            The list of values of the given feature.
+        """        
+        assert isinstance(feature, str), "The feature must be a string"
+        assert feature in self.SUPPORTED_PROPERTIES, f"The feature must be one of {self.SUPPORTED_PROPERTIES}"
+
+        return [props.get(feature, default_value) for i, props in enumerate(self.feature_props.values())]
+
 
     def destandardize_cfs_orig(self, pipeline: ColumnTransformer):
         """

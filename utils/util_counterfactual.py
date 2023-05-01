@@ -63,9 +63,7 @@ def generate_counterfactual(sample: pd.Series, sample_label: int, target_column:
     Raises
     ------
     ValueError
-        The type of counterfactual is not recognized.
-    SolverException
-        The solver did not find a solution.
+        Raised from errors.
     """    
     # Check all parameters are of the correct type
     assert isinstance(sample, pd.Series), "The sample must be a pandas series."
@@ -93,8 +91,6 @@ def generate_counterfactual(sample: pd.Series, sample_label: int, target_column:
         cf = cf_model.generate_counterfactuals(sample, type_cf_value, **kwargs_cf)
     except ValueError as e:
         raise ValueError(e)
-    except SolverException as e:
-        raise SolverException(e)
 
     # Denormalize the counterfactuals
     if pipeline is not None:
@@ -309,9 +305,6 @@ def generate_counterfactuals_from_sample_list(
                 **kwargs_cf,
             )
         except ValueError as e:
-            print(e)
-            continue
-        except SolverException as e:
             print(e)
             continue
 

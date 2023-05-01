@@ -48,6 +48,8 @@ class TestData(Dataset):
 class NNClassification(nn.Module):
     def __init__(self, hidden_dims, num_feat: int, num_class: int, dropout_rate: float):
         super(NNClassification, self).__init__()
+
+        self.dropout_rate = dropout_rate
         self.n_hidden_dims = len(hidden_dims)
 
         self.layer_1 = nn.Linear(num_feat, hidden_dims[0])
@@ -66,8 +68,10 @@ class NNClassification(nn.Module):
         x = self.relu(self.layer_1(inputs))
 
         for i in range(self.n_hidden_dims - 1):
-            # x = self.relu(self.hidden_layers[i](x))
-            x = self.relu(self.dropout_layers[i](self.hidden_layers[i](x)))
+            if self.dropout_rate == 0:
+                x = self.relu(self.hidden_layers[i](x))
+            else:
+                x = self.relu(self.dropout_layers[i](self.hidden_layers[i](x)))
             
         x = self.layer_n(x)
 
@@ -424,6 +428,11 @@ class TrainTestNetwork:
 
             n_losses.append(losses)
             n_accuracies.append(accuracies)
+
+            threshold_idx = round(0.2 * len(accuracies["val"]))
+            max_accuracy_fold = max(accuracies["val"][threshold_idx:])
+            kwargs["max_metric"] = max_accuracy_fold if kwargs["max_metric"] < max_accuracy_fold else kwargs["max_metric"]
+            print(f"New max accuracy: {kwargs['max_metric']:.3f}")
 
             print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .4f}\n")
 

@@ -180,7 +180,7 @@ def compute_obj_1_marginal_softmax(
     pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
     pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
 
-    l, u = (-min_probability - 1e-2, 3)
+    l, u = (-min_probability - 1e-2, 1)
 
     # set dummy parameters here to avoid warning message from Pyomo
     pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
@@ -230,8 +230,48 @@ def compute_obj_1_marginal_softmax(
     return pyo_model.obj1_max_val
 
 
+def initialize_sample_distance(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_weights: list[float]):
+    """_summary_
+
+    Parameters
+    ----------
+    pyo_model : _type_
+        _description_
+    x : np.ndarray
+        _description_
+    feat_ranges : pd.DataFrame
+        _description_
+    feat_weights : list[float]
+        _description_
+    """
+    # Assert all the parameters are of the correct type
+    assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
+    assert isinstance(sample, np.ndarray), "x must be a numpy array"
+    assert isinstance(feat_ranges, pd.DataFrame), "feat_ranges must be a pandas dataframe"
+    assert isinstance(feat_weights, list), "feat_weights must be a list"
+    assert sum(feat_weights) <= len(feat_weights), "feat_weights must sum to the length of the features"
+
+     # Set of the features
+    pyo_model.n_sample_set = pyo.RangeSet(0, len(sample) - 1)
+
+    # Define the variable for the distance
+    pyo_model.sample_distances = pyo.Var(
+        pyo_model.n_sample_set, initialize=0, bounds=(0, 1), domain=pyo.NonNegativeReals
+    )
+    
+    # Constraint for the distance
+    def dist_constr_rule(m, i):
+        return m.sample_distances[i] == (
+            (1 / (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2)
+            * (sample[i] - m.nn.inputs[i]) ** 2
+        ) * feat_weights[i]
+    
+    pyo_model.constr_distances = pyo.Constraint(
+        pyo_model.n_sample_set, rule=dist_constr_rule
+    )
+
 def gower_distance(
-    pyo_model, x: np.ndarray, feat_ranges: pd.DataFrame, feat_props: dict
+    pyo_model, sample: np.ndarray
 ):
     """
     It computes an adapted version of the Gower distance. In this case the
@@ -245,8 +285,10 @@ def gower_distance(
         The pyomo model where the variables and constraints will be added.
     x: np.ndarray
         The array of features of the original sample.
-    bounds: tuple(pd.Series, pd.Series)
-        The series of minimum and maximum values for each feature.
+    feat_ranges: pd.DataFrame
+        The dataframe containing the ranges of the features.
+    feat_weights: list[float]
+        The list of weights for the features.
 
     Returns
     -------
@@ -259,43 +301,41 @@ def gower_distance(
     """
     # Assert all the parameters are of the correct type
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
-    assert isinstance(x, np.ndarray), "x must be a numpy array"
-    assert isinstance(
-        feat_ranges, pd.DataFrame
-    ), "feat_ranges must be a pandas dataframe"
-    assert isinstance(feat_props, dict), "feat_props must be a dictionary"
+    assert isinstance(sample, np.ndarray), "x must be a numpy array"
 
-    # Compute
-    sum_distances = 0  # Sum of the distances
-    for i, props in enumerate(feat_props.values()):
-        # Get the range of the feature and the weight of the feature
-        range_i = (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2
-        weights_i = props.get("weight", 1)
+    # Set of the features
+    # pyo_model.obj2_set = pyo.RangeSet(0, len(sample) - 1)
 
-        # TODO replace euclidean distance with absolute distance
-        if props["type"] == "categorical":
-            # TODO should we use the same distance for categorical features?
-            sum_distances += (
-                (1 / range_i) * ((x[i] - pyo_model.nn.inputs[i]) ** 2) * weights_i
-            )
-        elif props["type"] == "continuous":
-            sum_distances += (
-                (1 / range_i) * ((x[i] - pyo_model.nn.inputs[i]) ** 2) * weights_i
-            )
-        else:
-            raise ValueError("The type of feature is not valid.")
+    # # Define the variable for the distance
+    # pyo_model.obj2_dist = pyo.Var(
+    #     pyo_model.obj2_set, within=pyo.NonNegativeReals, initialize=0, bounds=(0, 1)
+    # )
+    
+    # # Constraint for the distance
+    # def dist_constr_rule(m, i):
+    #     return m.obj2_dist[i] == (
+    #         (1 / (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2)
+    #         * (sample[i] - m.nn.inputs[i]) ** 2
+    #     ) * feat_weights[i]
+    
+    # pyo_model.obj2_dist_constr = pyo.Constraint(
+    #     pyo_model.obj2_set, rule=dist_constr_rule
+    # )
 
-    # Feature variables and constraints
-    num_features = len(x)
-
+    # # Feature variables and constraints
     pyo_model.obj2_sum = pyo.Var(
-        domain=pyo.Reals, bounds=(0, num_features), initialize=0
+        domain=pyo.NonNegativeReals, bounds=(0, 1), initialize=0
     )
-    pyo_model.obj2_sum_constr = pyo.Constraint(expr=pyo_model.obj2_sum == sum_distances)
-    return pyo_model.obj2_sum / num_features
+
+    num_features = len(sample)
+    def sum_constr_rule(m):
+        return m.obj2_sum == sum(m.sample_distances[i] for i in pyo_model.n_sample_set) / num_features
+    
+    pyo_model.obj2_sum_constr = pyo.Constraint(rule=sum_constr_rule)
+    return pyo_model.obj2_sum
 
 
-def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
+def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_props: list[float]):
     """
     It creates the third objective function, that limits the number of features
     changed during counterfactual.
@@ -320,40 +360,101 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame):
     assert isinstance(
         feat_ranges, pd.DataFrame
     ), "feat_ranges must be a pandas dataframe"
+    assert isinstance(feat_props, list), "feat_props must be a list"
 
-    num_features = len(sample)
+    categorical_features = [(idx, feat_prop) for idx, feat_prop in enumerate(feat_props) if feat_prop == "categorical"]
+    continuous_features = [(idx, feat_prop) for idx, feat_prop in enumerate(feat_props) if feat_prop == "continuous"]
+    assert len(categorical_features) + len(continuous_features) == len(feat_props), "feat_props must contain only 'categorical' or 'continuous' values"
+
     # Set of indexes for the features
-    feat_set = pyo.Set(initialize=range(0, num_features))
+    pyo_model.obj3_cat_set = pyo.RangeSet(0, len(categorical_features) - 1)
+    pyo_model.obj3_cont_set = pyo.RangeSet(0, len(continuous_features) - 1)
+    pyo_model.obj3_feat_set = pyo.RangeSet(0, len(sample) - 1)
+
+    def sample_cat_param_rule(m, i):
+        idx = categorical_features[i][0]
+        return sample[idx]
+    
+    def sample_cont_param_rule(m, i):
+        idx = continuous_features[i][0]
+        return sample[idx]
+    
+    def range_cat_param_rule(m, i):
+        idx = categorical_features[i][0]
+        return (feat_ranges["max"].iloc[idx] - feat_ranges["min"].iloc[idx]) ** 2
+    
+    def range_cont_param_rule(m, i):
+        idx = continuous_features[i][0]
+        return (feat_ranges["max"].iloc[idx] - feat_ranges["min"].iloc[idx]) ** 2
+
+    # Categorical features    
+    pyo_model.obj3_sample_cat = pyo.Param(
+        pyo_model.obj3_cat_set, initialize=sample_cat_param_rule,
+        mutable=False, within=pyo.NonNegativeIntegers)
+
+    pyo_model.obj3_range_cat = pyo.Param(
+        pyo_model.obj3_cat_set, initialize=range_cat_param_rule, mutable=False, within=pyo.NonNegativeIntegers)
+
+    # Continuous features
+    pyo_model.obj3_sample_cont = pyo.Param(
+        pyo_model.obj3_cont_set, initialize=sample_cont_param_rule,
+        mutable=False, within=pyo.Reals)
+    
+    pyo_model.obj3_range_cont = pyo.Param(
+        pyo_model.obj3_cont_set, initialize=range_cont_param_rule, mutable=False, within=pyo.NonNegativeReals)
+    
+    # Lower bound parameter
+    pyo_model.obj3_lower_bound = pyo.Param(initialize=1e-5, mutable=False)
+
+    # pyo_model.diff_o3_cat = pyo.Var(pyo_model.obj3_cat_set, domain=pyo.NonNegativeIntegers, initialize=0)
+    # pyo_model.diff_o3_cont = pyo.Var(pyo_model.obj3_cont_set, domain=pyo.NonNegativeReals, initialize=0)
+
     # Variables to handle the values
-    pyo_model.b_o3 = pyo.Var(feat_set, domain=pyo.Binary, initialize=0)
-    pyo_model.sum_o3 = pyo.Var(
-        domain=pyo.NonNegativeIntegers, bounds=(0, 1), initialize=0
-    )
-    pyo_model.diff_o3 = pyo.Var(feat_set, domain=pyo.NonNegativeReals, initialize=0)
+    pyo_model.b_o3 = pyo.Var(pyo_model.obj3_feat_set, domain=pyo.Binary, initialize=0)
     # Constraints for the if then else
-    pyo_model.constr_diff_o3 = pyo.Constraint(feat_set)
-    pyo_model.constr_less_o3 = pyo.Constraint(feat_set)
-    pyo_model.constr_great_o3 = pyo.Constraint(feat_set)
-    pyo_model.constr_sum_o3 = pyo.Constraint()
+    # pyo_model.constr_diff_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
+    pyo_model.constr_less_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
+    pyo_model.constr_great_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
 
-    for i in range(num_features):
-        range_i = (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2
-        threshold = 1e-3
+    # for i in pyo_model.obj3_cat_set:
+    #     idx = categorical_features[i][0]
+    #     pyo_model.diff_o3_cat[i].bounds = (0, pyo_model.obj3_range_cat[i])
 
-        pyo_model.constr_diff_o3[i] = (
-            pyo_model.diff_o3[i] == (sample[i] - pyo_model.nn.inputs[i]) ** 2
+    #     pyo_model.constr_diff_o3[idx] = (
+    #         pyo_model.diff_o3_cat[i] == (pyo_model.obj3_sample_cat[i] - pyo_model.nn.inputs[idx]) ** 2
+    #     )
+
+    #     pyo_model.constr_less_o3[idx] = (
+    #         pyo_model.diff_o3_cat[i] >= pyo_model.b_o3[idx] - 1 + pyo_model.obj3_lower_bound
+    #     )
+    #     pyo_model.constr_great_o3[idx] = pyo_model.diff_o3_cat[i] <= (
+    #         pyo_model.b_o3[idx] * pyo_model.obj3_range_cat[i]
+    #     )
+
+    for i in pyo_model.obj3_cont_set:
+        idx = continuous_features[i][0]
+        # pyo_model.diff_o3_cont[i].bounds = (0, pyo_model.obj3_range_cont[i])
+
+        # pyo_model.constr_diff_o3[idx] = (
+        #     pyo_model.sample_distances[i] == (pyo_model.obj3_sample_cont[i] - pyo_model.nn.inputs[idx]) ** 2
+        # )
+
+        pyo_model.constr_less_o3[idx] = (
+            pyo_model.sample_distances[idx] >= pyo_model.b_o3[idx] - 1 + pyo_model.obj3_lower_bound
+        )
+        pyo_model.constr_great_o3[idx] = pyo_model.sample_distances[idx] <= (
+            pyo_model.b_o3[idx] * pyo_model.obj3_range_cont[i]
         )
 
-        pyo_model.constr_less_o3[i] = (
-            pyo_model.diff_o3[i] >= pyo_model.b_o3[i] - 1 + threshold
-        )
-        pyo_model.constr_great_o3[i] = pyo_model.diff_o3[i] <= (
-            pyo_model.b_o3[i] * range_i
-        )
-    pyo_model.constr_sum_o3 = pyo_model.sum_o3 == sum(
-        [pyo_model.b_o3[i] for i in range(num_features)]
+    pyo_model.sum_o3 = pyo.Var(
+        domain=pyo.Reals, bounds=(0, 1), initialize=0
     )
-    return pyo_model.sum_o3 / num_features
+
+    def sum_constr_rule(m):
+        return m.sum_o3 == sum(m.b_o3[i] for i in pyo_model.obj3_feat_set) / len(sample)
+
+    pyo_model.constr_sum_o3 = pyo.Constraint(rule=sum_constr_rule)
+    return pyo_model.sum_o3
 
 
 def limit_counterfactual(pyo_model, sample, features, pyo_info):
@@ -561,6 +662,13 @@ class OmltCounterfactual(BaseCounterfactual):
         # Verbose print
         vprint = print if verbose else lambda *a, **k: None
 
+        # Define the ranges of the features in a dataframe
+        feat_ranges = pd.concat([self.X.min(), self.X.max()], axis=1).rename(
+            columns={0: "min", 1: "max"}
+        )
+
+        initialize_sample_distance(self.pyo_model, sample, feat_ranges, self.get_property_values("weight", 1))
+
         # Set the domain and bounds for each feature of the counterfactual
         features_constraints(self.pyo_model, self.feature_props)
 
@@ -575,19 +683,14 @@ class OmltCounterfactual(BaseCounterfactual):
                 self.pyo_model, cf_class, self.num_classes, min_probability
             )
 
-        # Define the ranges of the features in a dataframe
-        feat_ranges = pd.concat([self.X.min(), self.X.max()], axis=1).rename(
-            columns={0: "min", 1: "max"}
-        )
+        
 
         # OBJECTIVE 2 - generate counterfactual with limited distances from original features
         if objective_weights[1] == 0:
             vprint(f"Objective 2 is set to 0, so the Gower distance will be 0")
             gower_dist = 1
         else:
-            gower_dist = gower_distance(
-                self.pyo_model, sample, feat_ranges, self.feature_props
-            )
+            gower_dist = gower_distance(self.pyo_model, sample,)
 
         # OBJECTIVE 3 -  change the minimum number of features
         if objective_weights[2] == 0:
@@ -596,7 +699,7 @@ class OmltCounterfactual(BaseCounterfactual):
                 f"Objective 3 is set to 0, so the number of changed features is not minimized."
             )
         else:
-            obj_3 = compute_obj_3(self.pyo_model, sample, feat_ranges)
+            obj_3 = compute_obj_3(self.pyo_model, sample, feat_ranges, self.get_property_values("type", None))
 
         # Don't change some features
         # limit_counterfactual(self.pyo_model, sample, fixed_features, self.feature_props)
@@ -653,8 +756,10 @@ class OmltCounterfactual(BaseCounterfactual):
             If the solver is not supported. Only 'mindtpy' and 'multistart' are supported.
         ValueError:
             If the prediction of the sample is not the same as the cf_class.
-        SolverException:
+        ValueError:
             If the solver does not find a solution.
+        ValueError:
+            If the sample is equal to a sample of zeros.
         """
         # Assert all the parameters are of the correct type
         assert isinstance(df_sample, pd.DataFrame), "The sample must be a dataframe."
@@ -667,6 +772,7 @@ class OmltCounterfactual(BaseCounterfactual):
             min_probability >= 0
         ), "The minimum probability must be a float greater or equal to 0."
         assert isinstance(obj_weights, list), "The obj_weights must be a list."
+        assert sum(obj_weights) <= self.SUPPORTED_OBJECTIVES, f"The sum of the obj_weights must be less than {self.SUPPORTED_OBJECTIVES}."
         assert isinstance(solver, str), "The solver must be a string."
         assert isinstance(
             solver_options, dict
@@ -701,13 +807,13 @@ class OmltCounterfactual(BaseCounterfactual):
             try:
                 pyo_solution = solver_factory.solve(
                     self.pyo_model,
-                    tee=False,
+                    tee=True,
                     time_limit=solver_options["timelimit"],
                     mip_solver=self.AVAILABLE_SOLVERS["mip"],
                     nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
                 )
             except ValueError as e:
-                raise SolverException(e)
+                raise ValueError(e)
 
         elif solver == "multistart":
             vprint("\nStarting the search for a counterfactual ...")
@@ -737,6 +843,10 @@ class OmltCounterfactual(BaseCounterfactual):
         for i, feat in enumerate(self.X.columns):
             if abs(counterfactual_sample[i] - sample[i]) < 1e-3:
                 counterfactual_sample[i] = sample[i]
+
+        dummy_sample = np.zeros(len(self.X.columns))
+        if np.linalg.norm(np.array(counterfactual_sample) - dummy_sample, ord=1) < 1e-3:
+            raise ValueError("The counterfactual is the same as a sample of zeros.")
 
         counterfactual_df = pd.DataFrame(
             np.array(counterfactual_sample, ndmin=2),
