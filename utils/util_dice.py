@@ -54,6 +54,7 @@ class DiceCounterfactual(BaseCounterfactual):
             models.
         """
         self.explanation = dice_ml.Dice(self.data, self.model, method=method)
+        self.dice_method = method
 
     def generate_counterfactuals(
         self,
@@ -64,7 +65,6 @@ class DiceCounterfactual(BaseCounterfactual):
         proximity_weight: float = 0.4,
         sparsity_weight: float = 0.7,
         stopping_threshold: float = 0.5,
-        feature_weights="inverse_mad",
         features_to_vary="all",
     ):
         """
@@ -90,9 +90,6 @@ class DiceCounterfactual(BaseCounterfactual):
             created, used by 'genetic' generation.
         stopping_threshold: float
             The minimum threshold to for counterfactual target probability.
-        features_weights: str or dict
-            The dictionary with the name of the features as key and the weight
-            as value. By default is the 'inverse_mad'.
         features_to_vary: str or list[str]
             The string 'all' to consider all the features or a list of features
             present in the dataframe columns.
@@ -115,29 +112,36 @@ class DiceCounterfactual(BaseCounterfactual):
         # Save the passed samples
         self.start_samples = sample.copy()
 
-        if isinstance(
-            dice_ml.explainer_interfaces.dice_genetic.DiceGenetic,
-            type(self.explanation),
-        ):
-            raw_CFs = self.explanation.generate_counterfactuals(
-                sample.drop(target, axis=1),
-                total_CFs=n_cf,
-                desired_class=new_class,
-                proximity_weight=proximity_weight,
-                sparsity_weight=sparsity_weight,
-                stopping_threshold=stopping_threshold,
-                feature_weights=feature_weights,
-                features_to_vary=features_to_vary,
-            )
-        else:
-            # Random method doesn't support some parameters
-            raw_CFs = self.explanation.generate_counterfactuals(
-                sample.drop(target, axis=1),
-                total_CFs=n_cf,
-                desired_class=new_class,
-                stopping_threshold=stopping_threshold,
-                features_to_vary=features_to_vary,
-            )
+        feature_weights = {feat: info['weight'] for feat, info in self.feature_props.items()}
+        # features_to_vary = [feat for feat, info in self.feature_props.items() if info['fixed']]
+        # If all the weights are equal
+        if len(set(feature_weights.values())) == 1:
+            feature_weights="inverse_mad"
+
+        try:
+            if self.dice_method == "genetic":
+                    raw_CFs = self.explanation.generate_counterfactuals(
+                        sample.drop(target, axis=1),
+                        total_CFs=n_cf,
+                        desired_class=new_class,
+                        proximity_weight=proximity_weight,
+                        sparsity_weight=sparsity_weight,
+                        stopping_threshold=stopping_threshold,
+                        feature_weights=feature_weights,
+                        features_to_vary=features_to_vary,
+                    )
+            else:
+                # Random method doesn't support some parameters
+                raw_CFs = self.explanation.generate_counterfactuals(
+                    sample.drop(target, axis=1),
+                    total_CFs=n_cf,
+                    desired_class=new_class,
+                    stopping_threshold=stopping_threshold,
+                    features_to_vary=features_to_vary,
+                )
+        except dice_ml.model.UserConfigValidationException as e:
+            print(f"Counterfactual not found for the sample {sample.index}.")
+            raise(e)
 
         self.CFs = [cf.final_cfs_df.astype(float) for cf in raw_CFs.cf_examples_list]
 
