@@ -1,3 +1,5 @@
+from typing import Union
+
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 import torch
@@ -431,8 +433,9 @@ class TrainTestNetwork:
 
             threshold_idx = round(0.2 * len(accuracies["val"]))
             max_accuracy_fold = max(accuracies["val"][threshold_idx:])
-            kwargs["max_metric"] = max_accuracy_fold if kwargs["max_metric"] < max_accuracy_fold else kwargs["max_metric"]
-            print(f"New max accuracy: {kwargs['max_metric']:.3f}")
+            if max_accuracy_fold > kwargs["max_metric"]:
+                kwargs["max_metric"] = max_accuracy_fold
+                print(f"New max accuracy: {kwargs['max_metric']:.3f}")
 
             print(f"kfold on group {i+1} accuracy: {accuracies['val'][-1]: .4f}\n")
 
@@ -482,7 +485,7 @@ def compare_models(X, y, models, model_names, rng):
     return X_test, y_test, y_preds
 
 
-def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose=True, device=torch.device("cpu")) -> int:
+def evaluate_sample(model, sample_idx: Union[pd.DataFrame, pd.Series], y_idx: int, verbose=True, device=torch.device("cpu")) -> int:
     """It evaluates a given sample, running the model on it and computing the logits, the softmax,
     the predicted class and the marginal softmax. It returns a warning if sample_idx predicted label is different from y_idx.
 
@@ -505,7 +508,7 @@ def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose=True, devi
         Predicted label
     """ 
     # Assert all the parameters are of the correct type
-    assert isinstance(sample_idx, pd.DataFrame), "sample_idx must be a pandas dataframe"
+    assert type(sample_idx) in [pd.DataFrame, pd.Series], "sample_idx must be a pandas DataFrame or Series"
     assert type(y_idx) in [int, np.int32, np.int64], "y_idx must be an integer"
     assert isinstance(verbose, bool), "verbose must be a boolean"
 
@@ -513,10 +516,10 @@ def evaluate_sample(model, sample_idx: pd.Series, y_idx: int, verbose=True, devi
     model.eval()
     with torch.no_grad():
         model = model.to(device)
-        # if isinstance(sample_idx, pd.DataFrame): 
-            # sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
-        # else:
-        sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
+        if isinstance(sample_idx, pd.DataFrame): 
+            sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
+        else:
+            sample_idx = torch.tensor(sample_idx.values, dtype=torch.float).view(1, -1).to(device)
 
         # inference and print logits
         y_logit = model(sample_idx)

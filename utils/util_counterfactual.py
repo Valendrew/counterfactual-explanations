@@ -6,7 +6,7 @@ from sklearn.compose import ColumnTransformer
 
 # user imports
 from utils.util_dice import DiceCounterfactual
-from utils.util_omlt import OmltCounterfactual, SolverException
+from utils.util_omlt import OmltCounterfactual
 
 from dice_ml.model import UserConfigValidationException
 
@@ -206,6 +206,7 @@ def generate_counterfactuals_from_sample_list(
     feature_props: dict,
     type_cf: str,
     target_column: str,
+    save_filename: str,
     backend=None,
     dice_method=None,
     pipeline=None,
@@ -233,6 +234,8 @@ def generate_counterfactuals_from_sample_list(
         The new counterfactual class, if it needs to be lowered, increased or kept the same.
     target_column : str
         The target feature name of the dataset.
+    save_filename : str
+        The name of the file where to save the generated counterfactuals.
     backend : str, optional
         The backend to use to initialize the Dice model, by default None
     dice_method : str, optional
@@ -261,6 +264,7 @@ def generate_counterfactuals_from_sample_list(
     assert isinstance(feature_props, dict), "The feature_props parameter must be a dictionary."
     assert isinstance(type_cf, str), "The type_cf parameter must be a string."
     assert isinstance(target_column, str), "The target_column parameter must be a string."
+    assert isinstance(save_filename, str), "The save_filename parameter must be a string."
     assert isinstance(backend, str) or backend is None, "The backend parameter must be a string or None."
     assert isinstance(dice_method, str) or dice_method is None, "The dice_method parameter must be a string or None."
     assert isinstance(pipeline, ColumnTransformer) or pipeline is None, "The pipeline parameter must be a ColumnTransformer or None."
@@ -287,10 +291,10 @@ def generate_counterfactuals_from_sample_list(
     cfs_generated = pd.DataFrame()
     # Iterate over the samples and generate the counterfactuals
     for idx, i in enumerate(sample_list.index):
-        vprint(f"[{idx}] Generating counterfactual for sample {i}.")
+        print(f"[{idx}] Generating counterfactual for sample {i}.")
         
         if i not in label_list.index:
-            vprint(f"The index '{i}' of the sample list is not present in the label list.")
+            print(f"The index '{i}' of the sample list is not present in the label list.")
             continue
         
         try:
@@ -305,10 +309,16 @@ def generate_counterfactuals_from_sample_list(
             )
         except ValueError as e:
             print(e)
-            continue
+            if idx < 20:
+                raise e
+            else: 
+                continue
         except UserConfigValidationException as e:
             print(e)
-            continue
+            if idx < 20:
+                raise e
+            else:
+                continue
 
         if cfs is not None and len(cfs) > 0:
             sample_generated: pd.Series = cfs[0]["Counterfactual_0"].rename(i)
@@ -317,4 +327,5 @@ def generate_counterfactuals_from_sample_list(
             # Concat the generated counterfactual with the previous ones
             cfs_generated = pd.concat([cfs_generated, sample_generated.to_frame().T], axis=0)
 
+    cfs_generated.to_csv(save_filename, index=True)
     return cfs_generated

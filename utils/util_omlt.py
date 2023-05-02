@@ -26,8 +26,6 @@ from utils import util_models
 # Functions to compute the OMLT objectives
 ##############################################
 
-class SolverException(Exception):
-    pass
 
 
 def handmade_softmax(input, n_class, real_class):
@@ -70,17 +68,23 @@ def features_constraints(pyo_model, feature_props: dict):
     for idx, info in enumerate(feature_props.values()):
         if info["type"] == "categorical":
             # Categorical features are encoded as non-negative integers
-            pyo_model.nn.inputs[idx].domain = pyo.NonNegativeIntegers
+            domain = pyo.NonNegativeIntegers
+
         elif info["type"] == "continuous":
             # Continuous features are encoded as real numbers
-            pyo_model.nn.inputs[idx].domain = pyo.Reals
+            domain = pyo.Reals
         else:
             raise ValueError("The type of the feature is not valid.")
+        
+        # Set the domain
+        pyo_model.nn.inputs[idx].domain = domain
+        pyo_model.nn.scaled_inputs[idx].domain = domain
+        # Set the bounds
+        # pyo_model.nn.inputs[idx].bounds = info["bounds"]
+        # pyo_model.nn.scaled_inputs[idx].bounds = info["bounds"]
 
-        pyo_model.nn.inputs[idx].bounds = info["bounds"]
 
-
-def features_discrete_values(pyo_model, feature_props: dict):
+def features_discrete_values(pyo_model, feature_discrete: list[list]):
     """Generate the constraints for the discrete features.
 
     Parameters
@@ -93,53 +97,46 @@ def features_discrete_values(pyo_model, feature_props: dict):
     """
     # Assert all the parameters are of the correct type
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
-    assert isinstance(feature_props, dict), "feature_props must be a dictionary"
+    assert isinstance(feature_discrete, list), "feature_discrete must be a list"
 
-    # Get the discrete features as a list of tuples (index, values)
-    discrete_features = [
-        (i, info["discrete"])
-        for i, info in enumerate(feature_props.values())
-        if info.get("discrete") is not None
-    ]
-    # Sum the number of discrete values among all the features
-    sum_features = sum((len(f[1]) for f in discrete_features))
+    num_discrete_values = [0 if f is None else len(f) for f in feature_discrete]
+    index_not_none = [i for i, f in enumerate(feature_discrete) if f is not None]
 
-    # Compute the start indexes for each feature
-    start_indexes = [0]
-    for idx, (_, feat) in enumerate(discrete_features):
-        if idx == len(discrete_features) - 1:
-            continue
-        start_indexes.append(start_indexes[-1] + len(feat))
-
-    # Set the discrete set
-    pyo_model.n_discrete_set = pyo.RangeSet(0, sum_features - 1)
-    pyo_model.discrete_set = pyo.RangeSet(0, len(discrete_features) - 1)
-
-    # Set the discrete variables
-    pyo_model.discrete_q = pyo.Var(pyo_model.n_discrete_set, domain=pyo.Binary)
-
-    # Set the constraints
-    def discrete_sum_rule(model, i):
-        return (
-            sum(
-                model.discrete_q[j + start_indexes[i]]
-                for j in range(len(discrete_features[i][1]))
-            )
-            == 1
-        )
-
-    pyo_model.discrete_constr_sum = pyo.Constraint(
-        pyo_model.discrete_set, rule=discrete_sum_rule
+    # Sets
+    pyo_model.discrete_features = pyo.Set(initialize=index_not_none)
+    pyo_model.discrete_max_values = pyo.RangeSet(0, max(num_discrete_values) - 1)
+    pyo_model.discrete_features_values = pyo.Set(initialize=pyo_model.discrete_features * pyo_model.discrete_max_values)
+    
+    def discrete_feature_values_init(model, i):
+        for j in range(num_discrete_values[i]):
+            yield j
+                    
+    pyo_model.discrete_feature_values = pyo.Set(
+        pyo_model.discrete_features, initialize=discrete_feature_values_init
     )
 
-    def discrete_input_rule(model, i):
-        return model.nn.inputs[discrete_features[i][0]] == sum(
-            discrete_features[i][1][j] * model.discrete_q[j + start_indexes[i]]
-            for j in range(len(discrete_features[i][1]))
+    # Set the discrete variables
+    pyo_model.discrete_q = pyo.Var(
+        pyo_model.discrete_features_values, domain=pyo.Binary, initialize=0
+    )
+
+    # Set the constraints
+    def discrete_sum_rule(m, i):
+        return (
+            sum(m.discrete_q[i, j] for j in m.discrete_feature_values[i]) == 1
         )
 
+    pyo_model.discrete_constr_q_sum = pyo.Constraint(
+        pyo_model.discrete_features, rule=discrete_sum_rule
+    )
+
+    def discrete_input_rule(m, i):
+        return m.nn.inputs[i] == sum(
+            feature_discrete[i][j] * m.discrete_q[i, j]
+            for j in m.discrete_feature_values[i])
+
     pyo_model.discrete_constr_input = pyo.Constraint(
-        pyo_model.discrete_set, rule=discrete_input_rule
+        pyo_model.discrete_features, rule=discrete_input_rule
     )
 
 
@@ -180,7 +177,7 @@ def compute_obj_1_marginal_softmax(
     pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
     pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
 
-    l, u = (-min_probability - 1e-2, 1)
+    l, u = (-min_probability - 1e-2, 3)
 
     # set dummy parameters here to avoid warning message from Pyomo
     pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
@@ -201,8 +198,8 @@ def compute_obj_1_marginal_softmax(
     def softmax_constr_rule(m):
         return (
             m.obj1_marginal_softmax
-            == pyo.log(sum([pyo.exp(m.nn.outputs[i]) for i in range(num_classes)]))
-            - m.nn.outputs[cf_class]
+            == pyo.log(sum([pyo.exp(m.nn.scaled_outputs[i]) for i in range(num_classes)]))
+            - m.nn.scaled_outputs[cf_class]
         )
 
     pyo_model.obj1_marginal_softmax_constr = pyo.Constraint(
@@ -230,7 +227,9 @@ def compute_obj_1_marginal_softmax(
     return pyo_model.obj1_max_val
 
 
-def initialize_sample_distance(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_weights: list[float]):
+def initialize_sample_distance(
+    pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_weights: list[float]
+):
     """_summary_
 
     Parameters
@@ -247,32 +246,90 @@ def initialize_sample_distance(pyo_model, sample: np.ndarray, feat_ranges: pd.Da
     # Assert all the parameters are of the correct type
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
     assert isinstance(sample, np.ndarray), "x must be a numpy array"
-    assert isinstance(feat_ranges, pd.DataFrame), "feat_ranges must be a pandas dataframe"
+    assert isinstance(
+        feat_ranges, pd.DataFrame
+    ), "feat_ranges must be a pandas dataframe"
     assert isinstance(feat_weights, list), "feat_weights must be a list"
-    assert sum(feat_weights) <= len(feat_weights), "feat_weights must sum to the length of the features"
+    assert sum(feat_weights) <= len(
+        feat_weights
+    ), "feat_weights must sum to the length of the features"
 
-     # Set of the features
-    pyo_model.n_sample_set = pyo.RangeSet(0, len(sample) - 1)
+    # Set of the features
+    pyo_model.features_set = pyo.RangeSet(0, len(sample) - 1)
 
+    def feature_ranges_init(m, i):
+        return feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]
+    
+    pyo_model.feature_ranges = pyo.Param(
+        pyo_model.features_set, initialize=feature_ranges_init, mutable=False
+    )
+
+    # Absolute value of the difference between the sample and the input between the range of the feature
+    pyo_model.absolute_binary = pyo.Var(pyo_model.features_set, within=pyo.Binary, initialize=0)
+
+    # i - s <= r * b
+    def absolute_constr_1_rule(m, i):
+        return m.nn.scaled_inputs[i] - sample[i] <= m.feature_ranges[i] * m.absolute_binary[i]
+
+    pyo_model.constr_absolute_1 = pyo.Constraint(pyo_model.features_set, rule=absolute_constr_1_rule)
+
+    # s - i <= r * (1 - b)
+    def absolute_constr_2_rule(m, i):
+        return sample[i] - m.nn.scaled_inputs[i] <= m.feature_ranges[i] * (1 - m.absolute_binary[i])
+    
+    pyo_model.constr_absolute_2 = pyo.Constraint(pyo_model.features_set, rule=absolute_constr_2_rule)
+
+    # Absolute distance between the sample and the input
+    pyo_model.absolute_distance = pyo.Var(pyo_model.features_set, within=pyo.Reals, initialize=0)
+
+    # i - s <= d
+    def absolute_distance_constr_1_rule(m, i):
+        return m.nn.scaled_inputs[i] - sample[i] <= m.absolute_distance[i]
+    
+    pyo_model.constr_absolute_distance_1 = pyo.Constraint(pyo_model.features_set, rule=absolute_distance_constr_1_rule)
+
+    # s - i <= d
+    def absolute_distance_constr_2_rule(m, i):
+        return sample[i] - m.nn.scaled_inputs[i] <= m.absolute_distance[i]
+    
+    pyo_model.constr_absolute_distance_2 = pyo.Constraint(pyo_model.features_set, rule=absolute_distance_constr_2_rule)
+
+    # Absolute distance between the double of the ranges
+    # d <= i - s + 2 * r * (1 - b)
+    def absolute_bounds_constr_1_rule(m, i):
+        return m.absolute_distance[i] <= m.nn.scaled_inputs[i] - sample[i] + 2 * m.feature_ranges[i] * (1 - m.absolute_binary[i])
+    
+    pyo_model.constr_absolute_bounds_1 = pyo.Constraint(pyo_model.features_set, rule=absolute_bounds_constr_1_rule)
+
+    # d <= s - i + 2 * r * b
+    def absolute_bounds_constr_2_rule(m, i):
+        return m.absolute_distance[i] <= sample[i] - m.nn.scaled_inputs[i] + 2 * m.feature_ranges[i] * m.absolute_binary[i]
+    
+    pyo_model.constr_absolute_bounds_2 = pyo.Constraint(pyo_model.features_set, rule=absolute_bounds_constr_2_rule)
+
+    # SAMPLE DISTANCE
     # Define the variable for the distance
     pyo_model.sample_distances = pyo.Var(
-        pyo_model.n_sample_set, initialize=0, bounds=(0, 1), domain=pyo.NonNegativeReals
-    )
-    
-    # Constraint for the distance
-    def dist_constr_rule(m, i):
-        return m.sample_distances[i] == (
-            (1 / (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2)
-            * (sample[i] - m.nn.inputs[i]) ** 2
-        ) * feat_weights[i]
-    
-    pyo_model.constr_distances = pyo.Constraint(
-        pyo_model.n_sample_set, rule=dist_constr_rule
+        pyo_model.features_set, initialize=0, bounds=(0, 1), domain=pyo.NonNegativeReals
     )
 
-def gower_distance(
-    pyo_model, sample: np.ndarray
-):
+    # Constraint for the distance
+    def dist_constr_rule(m, i):
+        return (
+            m.sample_distances[i]
+            == (
+                (1 / m.feature_ranges[i])
+                * m.absolute_distance[i]
+            )
+            * feat_weights[i]
+        )
+
+    pyo_model.constr_distances = pyo.Constraint(
+        pyo_model.features_set, rule=dist_constr_rule
+    )
+
+
+def gower_distance(pyo_model, sample: np.ndarray):
     """
     It computes an adapted version of the Gower distance. In this case the
     function will also compute the distance between the categorical features
@@ -303,39 +360,26 @@ def gower_distance(
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
     assert isinstance(sample, np.ndarray), "x must be a numpy array"
 
-    # Set of the features
-    # pyo_model.obj2_set = pyo.RangeSet(0, len(sample) - 1)
-
-    # # Define the variable for the distance
-    # pyo_model.obj2_dist = pyo.Var(
-    #     pyo_model.obj2_set, within=pyo.NonNegativeReals, initialize=0, bounds=(0, 1)
-    # )
-    
-    # # Constraint for the distance
-    # def dist_constr_rule(m, i):
-    #     return m.obj2_dist[i] == (
-    #         (1 / (feat_ranges["max"].iloc[i] - feat_ranges["min"].iloc[i]) ** 2)
-    #         * (sample[i] - m.nn.inputs[i]) ** 2
-    #     ) * feat_weights[i]
-    
-    # pyo_model.obj2_dist_constr = pyo.Constraint(
-    #     pyo_model.obj2_set, rule=dist_constr_rule
-    # )
-
     # # Feature variables and constraints
-    pyo_model.obj2_sum = pyo.Var(
+    pyo_model.gower_distance = pyo.Var(
         domain=pyo.NonNegativeReals, bounds=(0, 1), initialize=0
     )
 
     num_features = len(sample)
+
     def sum_constr_rule(m):
-        return m.obj2_sum == sum(m.sample_distances[i] for i in pyo_model.n_sample_set) / num_features
-    
+        return (
+            m.gower_distance
+            == sum(m.sample_distances[i] for i in pyo_model.features_set) / num_features
+        )
+
     pyo_model.obj2_sum_constr = pyo.Constraint(rule=sum_constr_rule)
-    return pyo_model.obj2_sum
+    return pyo_model.gower_distance
 
 
-def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_props: list[float]):
+def compute_obj_3(
+    pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_props: list[float]
+):
     """
     It creates the third objective function, that limits the number of features
     changed during counterfactual.
@@ -353,7 +397,6 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat
     --------
     It returns the pyomo variable that represents the number of changed variables.
     """
-    # TODO TO FINISH
     # Assert all the parameters are of the correct type
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
     assert isinstance(sample, np.ndarray), "sample must be a numpy array"
@@ -362,96 +405,29 @@ def compute_obj_3(pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat
     ), "feat_ranges must be a pandas dataframe"
     assert isinstance(feat_props, list), "feat_props must be a list"
 
-    categorical_features = [(idx, feat_prop) for idx, feat_prop in enumerate(feat_props) if feat_prop == "categorical"]
-    continuous_features = [(idx, feat_prop) for idx, feat_prop in enumerate(feat_props) if feat_prop == "continuous"]
-    assert len(categorical_features) + len(continuous_features) == len(feat_props), "feat_props must contain only 'categorical' or 'continuous' values"
-
-    # Set of indexes for the features
-    pyo_model.obj3_cat_set = pyo.RangeSet(0, len(categorical_features) - 1)
-    pyo_model.obj3_cont_set = pyo.RangeSet(0, len(continuous_features) - 1)
-    pyo_model.obj3_feat_set = pyo.RangeSet(0, len(sample) - 1)
-
-    def sample_cat_param_rule(m, i):
-        idx = categorical_features[i][0]
-        return sample[idx]
-    
-    def sample_cont_param_rule(m, i):
-        idx = continuous_features[i][0]
-        return sample[idx]
-    
-    def range_cat_param_rule(m, i):
-        idx = categorical_features[i][0]
-        return (feat_ranges["max"].iloc[idx] - feat_ranges["min"].iloc[idx]) ** 2
-    
-    def range_cont_param_rule(m, i):
-        idx = continuous_features[i][0]
-        return (feat_ranges["max"].iloc[idx] - feat_ranges["min"].iloc[idx]) ** 2
-
-    # Categorical features    
-    pyo_model.obj3_sample_cat = pyo.Param(
-        pyo_model.obj3_cat_set, initialize=sample_cat_param_rule,
-        mutable=False, within=pyo.NonNegativeIntegers)
-
-    pyo_model.obj3_range_cat = pyo.Param(
-        pyo_model.obj3_cat_set, initialize=range_cat_param_rule, mutable=False, within=pyo.NonNegativeIntegers)
-
-    # Continuous features
-    pyo_model.obj3_sample_cont = pyo.Param(
-        pyo_model.obj3_cont_set, initialize=sample_cont_param_rule,
-        mutable=False, within=pyo.Reals)
-    
-    pyo_model.obj3_range_cont = pyo.Param(
-        pyo_model.obj3_cont_set, initialize=range_cont_param_rule, mutable=False, within=pyo.NonNegativeReals)
-    
     # Lower bound parameter
     pyo_model.obj3_lower_bound = pyo.Param(initialize=1e-5, mutable=False)
 
-    # pyo_model.diff_o3_cat = pyo.Var(pyo_model.obj3_cat_set, domain=pyo.NonNegativeIntegers, initialize=0)
-    # pyo_model.diff_o3_cont = pyo.Var(pyo_model.obj3_cont_set, domain=pyo.NonNegativeReals, initialize=0)
-
     # Variables to handle the values
-    pyo_model.b_o3 = pyo.Var(pyo_model.obj3_feat_set, domain=pyo.Binary, initialize=0)
+    pyo_model.b_o3 = pyo.Var(pyo_model.features_set, domain=pyo.Binary, initialize=0)
     # Constraints for the if then else
     # pyo_model.constr_diff_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
-    pyo_model.constr_less_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
-    pyo_model.constr_great_o3 = pyo.Constraint(pyo_model.obj3_feat_set)
+    pyo_model.constr_less_o3 = pyo.Constraint(pyo_model.features_set)
+    pyo_model.constr_great_o3 = pyo.Constraint(pyo_model.features_set)
 
-    # for i in pyo_model.obj3_cat_set:
-    #     idx = categorical_features[i][0]
-    #     pyo_model.diff_o3_cat[i].bounds = (0, pyo_model.obj3_range_cat[i])
-
-    #     pyo_model.constr_diff_o3[idx] = (
-    #         pyo_model.diff_o3_cat[i] == (pyo_model.obj3_sample_cat[i] - pyo_model.nn.inputs[idx]) ** 2
-    #     )
-
-    #     pyo_model.constr_less_o3[idx] = (
-    #         pyo_model.diff_o3_cat[i] >= pyo_model.b_o3[idx] - 1 + pyo_model.obj3_lower_bound
-    #     )
-    #     pyo_model.constr_great_o3[idx] = pyo_model.diff_o3_cat[i] <= (
-    #         pyo_model.b_o3[idx] * pyo_model.obj3_range_cat[i]
-    #     )
-
-    for i in pyo_model.obj3_cont_set:
-        idx = continuous_features[i][0]
-        # pyo_model.diff_o3_cont[i].bounds = (0, pyo_model.obj3_range_cont[i])
-
-        # pyo_model.constr_diff_o3[idx] = (
-        #     pyo_model.sample_distances[i] == (pyo_model.obj3_sample_cont[i] - pyo_model.nn.inputs[idx]) ** 2
-        # )
-
-        pyo_model.constr_less_o3[idx] = (
-            pyo_model.sample_distances[idx] >= pyo_model.b_o3[idx] - 1 + pyo_model.obj3_lower_bound
+    for i in pyo_model.features_set:
+        pyo_model.constr_less_o3[i] = (
+            pyo_model.sample_distances[i]
+            >= pyo_model.b_o3[i] - 1 + pyo_model.obj3_lower_bound
         )
-        pyo_model.constr_great_o3[idx] = pyo_model.sample_distances[idx] <= (
-            pyo_model.b_o3[idx] * pyo_model.obj3_range_cont[i]
+        pyo_model.constr_great_o3[i] = pyo_model.sample_distances[i] <= (
+            pyo_model.b_o3[i]
         )
 
-    pyo_model.sum_o3 = pyo.Var(
-        domain=pyo.Reals, bounds=(0, 1), initialize=0
-    )
+    pyo_model.sum_o3 = pyo.Var(domain=pyo.Reals, bounds=(0, 1), initialize=0)
 
     def sum_constr_rule(m):
-        return m.sum_o3 == sum(m.b_o3[i] for i in pyo_model.obj3_feat_set) / len(sample)
+        return m.sum_o3 == sum(m.b_o3[i] for i in pyo_model.features_set) / len(sample)
 
     pyo_model.constr_sum_o3 = pyo.Constraint(rule=sum_constr_rule)
     return pyo_model.sum_o3
@@ -491,7 +467,7 @@ def limit_counterfactual(pyo_model, sample, features, pyo_info):
     for feat in features:
         idx = pyo_info[feat]["index"]
         # Set the counterfactual feature equals to the sample feature
-        pyo_model.lim_constr[idx] = pyo_model.nn.inputs[idx] == sample[idx]
+        pyo_model.lim_constr[idx] = pyo_model.nn.scaled_inputs[idx] == sample[idx]
 
 
 class OmltCounterfactual(BaseCounterfactual):
@@ -538,7 +514,7 @@ class OmltCounterfactual(BaseCounterfactual):
         # Check if the solvers are available in the system
         self.__check_available_solvers()
         # Create the network formulation
-        self.__create_network_formulation(-1.0, 1.0)
+        self.__create_network_formulation(-3.0, 3.0)
 
     def __check_available_solvers(self):
         """
@@ -572,13 +548,17 @@ class OmltCounterfactual(BaseCounterfactual):
         num_features = self.X.shape[1]
         dummy_sample = torch.zeros(size=(1, num_features), dtype=torch.float)
         # Set bound arrays by repeating the bounds for each feature
-        lb_values = np.repeat(lb, num_features)
-        ub_values = np.repeat(ub, num_features)
+        # lb_values = np.repeat(lb, num_features)
+        # ub_values = np.repeat(ub, num_features)
+        bounds = self.get_property_values("bounds", None)
+        assert all(b is not None for b in bounds), "All the features must have bounds"
+        assert len(bounds) == num_features, "The number of bounds must be equal to the number of features"
 
         # Set the bounds for each feature
         input_bounds = {}
         for i in range(num_features):
-            input_bounds[i] = (float(lb_values[i]), float(ub_values[i]))
+            # input_bounds[i] = (float(lb_values[i]), float(ub_values[i]))
+            input_bounds[i] = (float(bounds[i][0]), float(bounds[i][1]))
 
         with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as f:
             # Export neural network to ONNX
@@ -615,7 +595,7 @@ class OmltCounterfactual(BaseCounterfactual):
         cf_class: int,
         min_probability: float,
         objective_weights: list[float],
-        verbose: bool
+        verbose: bool,
     ):
         """
         It computes the objective functions to optimize to generate the counterfactuals.
@@ -662,18 +642,14 @@ class OmltCounterfactual(BaseCounterfactual):
         # Verbose print
         vprint = print if verbose else lambda *a, **k: None
 
-        # Define the ranges of the features in a dataframe
-        feat_ranges = pd.concat([self.X.min(), self.X.max()], axis=1).rename(
-            columns={0: "min", 1: "max"}
-        )
-
-        initialize_sample_distance(self.pyo_model, sample, feat_ranges, self.get_property_values("weight", 1))
-
         # Set the domain and bounds for each feature of the counterfactual
+        # TODO evaluate whether to remove
         features_constraints(self.pyo_model, self.feature_props)
 
         # Set the discrete values for some numerical features
-        features_discrete_values(self.pyo_model, self.feature_props)
+        features_discrete_values(
+            self.pyo_model, self.get_property_values("discrete", None)
+        )
 
         # OBJECTIVE 1 - generate the counterfactual with the correct class
         if objective_weights[0] == 0:
@@ -683,14 +659,33 @@ class OmltCounterfactual(BaseCounterfactual):
                 self.pyo_model, cf_class, self.num_classes, min_probability
             )
 
-        
+        # OBJECTIVE 2 and 3
+        # Define the ranges of the features in a dataframe
+        feat_ranges = pd.concat([self.X.min(), self.X.max()], axis=1).rename(
+            columns={0: "min", 1: "max"}
+        )
+        if any([(sample < feat_ranges["min"]).any(), (sample > feat_ranges["max"]).any()]):
+            raise ValueError("The sample is out of the bounds of the dataset.")
+        # bounds_props = self.get_property_values("bounds", None)
+        # for i in range(len(bounds_props)):
+            # feat_ranges["min"].iloc[i] = max(bounds_props[i][0], feat_ranges["min"].iloc[i])
+            # feat_ranges["max"].iloc[i] = min(bounds_props[i][1], feat_ranges["max"].iloc[i])
+
+
+        if objective_weights[1] > 0 or objective_weights[2] > 0:
+            initialize_sample_distance(
+                self.pyo_model, sample, feat_ranges, self.get_property_values("weight", 1)
+            )
 
         # OBJECTIVE 2 - generate counterfactual with limited distances from original features
         if objective_weights[1] == 0:
             vprint(f"Objective 2 is set to 0, so the Gower distance will be 0")
             gower_dist = 1
         else:
-            gower_dist = gower_distance(self.pyo_model, sample,)
+            gower_dist = gower_distance(
+                self.pyo_model,
+                sample,
+            )
 
         # OBJECTIVE 3 -  change the minimum number of features
         if objective_weights[2] == 0:
@@ -699,7 +694,12 @@ class OmltCounterfactual(BaseCounterfactual):
                 f"Objective 3 is set to 0, so the number of changed features is not minimized."
             )
         else:
-            obj_3 = compute_obj_3(self.pyo_model, sample, feat_ranges, self.get_property_values("type", None))
+            obj_3 = compute_obj_3(
+                self.pyo_model,
+                sample,
+                feat_ranges,
+                self.get_property_values("type", None),
+            )
 
         # Don't change some features
         # limit_counterfactual(self.pyo_model, sample, fixed_features, self.feature_props)
@@ -772,7 +772,9 @@ class OmltCounterfactual(BaseCounterfactual):
             min_probability >= 0
         ), "The minimum probability must be a float greater or equal to 0."
         assert isinstance(obj_weights, list), "The obj_weights must be a list."
-        assert sum(obj_weights) <= self.SUPPORTED_OBJECTIVES, f"The sum of the obj_weights must be less than {self.SUPPORTED_OBJECTIVES}."
+        assert (
+            sum(obj_weights) <= self.SUPPORTED_OBJECTIVES
+        ), f"The sum of the obj_weights must be less than {self.SUPPORTED_OBJECTIVES}."
         assert isinstance(solver, str), "The solver must be a string."
         assert isinstance(
             solver_options, dict
@@ -790,11 +792,7 @@ class OmltCounterfactual(BaseCounterfactual):
         self.__build_model()
         # Set the objective function
         self.__compute_objectives(
-            sample[:-1],
-            cf_class,
-            min_probability,
-            obj_weights,
-            verbose
+            sample[:-1], cf_class, min_probability, obj_weights, verbose
         )
 
         # Set the solver to mindtpy
@@ -803,11 +801,10 @@ class OmltCounterfactual(BaseCounterfactual):
         # Set the solver options and solve the problem
         start_time = time.time()
         if solver == "mindtpy":
-            # TODO replace false with verbose
             try:
                 pyo_solution = solver_factory.solve(
                     self.pyo_model,
-                    tee=True,
+                    tee=verbose,
                     time_limit=solver_options["timelimit"],
                     mip_solver=self.AVAILABLE_SOLVERS["mip"],
                     nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
@@ -837,7 +834,7 @@ class OmltCounterfactual(BaseCounterfactual):
 
         self.start_samples = sample
         # Convert the pyomo solution to a dataframe
-        counterfactual_sample = list(self.pyo_model.nn.inputs.get_values().values())
+        counterfactual_sample = list(self.pyo_model.nn.scaled_inputs.get_values().values())
 
         # Check if some features have changed only by a small amount
         for i, feat in enumerate(self.X.columns):
