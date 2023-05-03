@@ -309,16 +309,10 @@ def generate_counterfactuals_from_sample_list(
             )
         except ValueError as e:
             print(e)
-            if idx < 20:
-                raise e
-            else: 
-                continue
+            continue
         except UserConfigValidationException as e:
             print(e)
-            if idx < 20:
-                raise e
-            else:
-                continue
+            continue
 
         if cfs is not None and len(cfs) > 0:
             sample_generated: pd.Series = cfs[0]["Counterfactual_0"].rename(i)

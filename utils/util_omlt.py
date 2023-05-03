@@ -228,7 +228,7 @@ def compute_obj_1_marginal_softmax(
 
 
 def initialize_sample_distance(
-    pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_weights: list[float]
+    pyo_model, sample: np.ndarray, feat_ranges: pd.DataFrame, feat_weights: list[float], feat_type: list[str]
 ):
     """_summary_
 
@@ -253,6 +253,7 @@ def initialize_sample_distance(
     assert sum(feat_weights) <= len(
         feat_weights
     ), "feat_weights must sum to the length of the features"
+    assert isinstance(feat_type, list), "feat_type must be a list"
 
     # Set of the features
     pyo_model.features_set = pyo.RangeSet(0, len(sample) - 1)
@@ -280,7 +281,13 @@ def initialize_sample_distance(
     pyo_model.constr_absolute_2 = pyo.Constraint(pyo_model.features_set, rule=absolute_constr_2_rule)
 
     # Absolute distance between the sample and the input
-    pyo_model.absolute_distance = pyo.Var(pyo_model.features_set, within=pyo.Reals, initialize=0)
+    def absolute_distance_within(m, i):
+        if feat_type[i] == "categorical":
+            return pyo.NonNegativeIntegers
+        else:
+            return pyo.NonNegativeReals
+
+    pyo_model.absolute_distance = pyo.Var(pyo_model.features_set, within=absolute_distance_within, initialize=0)
 
     # i - s <= d
     def absolute_distance_constr_1_rule(m, i):
@@ -674,7 +681,8 @@ class OmltCounterfactual(BaseCounterfactual):
 
         if objective_weights[1] > 0 or objective_weights[2] > 0:
             initialize_sample_distance(
-                self.pyo_model, sample, feat_ranges, self.get_property_values("weight", 1)
+                self.pyo_model, sample, feat_ranges, 
+                self.get_property_values("weight", 1), self.get_property_values("type", None)
             )
 
         # OBJECTIVE 2 - generate counterfactual with limited distances from original features
