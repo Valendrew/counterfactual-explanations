@@ -66,6 +66,7 @@ class DiceCounterfactual(BaseCounterfactual):
         sparsity_weight: float = 0.7,
         stopping_threshold: float = 0.5,
         features_to_vary="all",
+        verbose=False
     ):
         """
         It generates the counterfactuals using an explanation instance.

@@ -291,7 +291,7 @@ def generate_counterfactuals_from_sample_list(
     cfs_generated = pd.DataFrame()
     # Iterate over the samples and generate the counterfactuals
     for idx, i in enumerate(sample_list.index):
-        print(f"[{idx}] Generating counterfactual for sample {i}.")
+        vprint(f"[{idx}] Generating counterfactual for sample {i}.")
         
         if i not in label_list.index:
             print(f"The index '{i}' of the sample list is not present in the label list.")
