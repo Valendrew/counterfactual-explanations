@@ -72,7 +72,8 @@ def join_merge_columns(df_cf, df_original):
 def count_changed_features(series, num_features):
     '''
     It returns the number of features that has been changed in the
-    counterfactual.
+    counterfactual, subtracting to the number of features, the ones
+    that are Nan (not changed) in the series.
 
     Parameters:
     -----------
@@ -89,34 +90,6 @@ def count_changed_features(series, num_features):
     return num_features - series.isna().sum()
 
 
-def plot_changed_features_count(df):
-    '''
-    It plots four different graphs that represent the number of changed features
-    in the computed counterfactuals, divided by range of price change.
-
-    Parameters:
-    -----------
-    df: pd.DataFrame
-        The dataframe that contains the data to plot.
-    '''
-    assert isinstance(df, pd.DataFrame)
-    grouped_df = df.groupby(['misc_price_min_original', 'misc_price_min_cf'], axis=0)
-    fig, axs = plt.subplots(2, 2, figsize=(14, 8))
-    faxs = axs.ravel()
-
-    for i, (name, group) in enumerate(grouped_df):
-        original_price = (group["misc_price_min_original"].unique().item(), group["misc_price_max_original"].unique().item())
-        assert len(original_price) == 2
-        cf_price = (group["misc_price_min_cf"].unique().item(), group["misc_price_max_cf"].unique().item())
-        assert len(cf_price) == 2
-
-        num_changed = group.apply(lambda x: count_changed_features(x, 17), axis=1)
-        num_changed.value_counts().sort_index().plot.bar(ax=faxs[i], title=f"Original price range: {original_price} - CF price range: {cf_price}")
-
-    fig.suptitle("Number of changed features per price range")
-    fig.tight_layout()
-    
-
 def count_type_features(series, columns: pd.Index):
     na_columns = series[series.isna()].index
     assert isinstance(na_columns, pd.Index)
@@ -124,35 +97,107 @@ def count_type_features(series, columns: pd.Index):
     return columns.difference(na_columns).to_numpy()
 
 
-def plot_changed_features(df, feature_columns):
+def convert_string_feat(df, feat_map):
+    for feat, val in feat_map.items():
+        df[feat] = df[feat].replace(val)
+    return df
+
+
+def compute_distance(x, y, ord=2):
+    return np.linalg.norm(x - y, ord=ord)
+
+
+def subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(12, 8)):
     '''
-    It plots different graphs to show which features have been changed the most
-    during counterfactual generation.
+    It plots four different graphs that represent the number of changed features
+    in the computed counterfactuals, split by range of price change.
+
+    Parameters:
+    -----------
+    Check the documentation of 'plot_cfs_stats'.
+    '''
+    assert isinstance(df, pd.DataFrame)
+    feat_prices_min = ['misc_price_min_original', 'misc_price_min_cf']
+    feat_prices_max = ['misc_price_max_original', 'misc_price_max_cf']
+
+    grouped_df = df.groupby(feat_prices_min, axis=0)
+    fig, axs = plt.subplots(2, 2, figsize=figsize)
+    faxs = axs.ravel()
+
+    for i, (_, group) in enumerate(grouped_df):
+        original_price = (group[feat_prices_min[0]].unique().item(), group[feat_prices_max[0]].unique().item())
+        assert len(original_price) == 2
+        cf_price = (group[feat_prices_min[1]].unique().item(), group[feat_prices_max[1]].unique().item())
+        assert len(cf_price) == 2
+
+        if plot_mode == "changed_feat":
+            num_changed = group.apply(lambda x: count_changed_features(x, 17), axis=1)
+            num_changed.value_counts().sort_index().plot.bar(ax=faxs[i], rot=0, title=f"Original price range: {original_price} - CF price range: {cf_price}")
+        elif plot_mode == "feat_count":
+            features_changed = Counter(np.concatenate(group.apply(count_type_features, columns=feature_columns, axis=1).values))
+            features_changed = pd.Series(features_changed).sort_values()
+            features_changed.plot.barh(title=f"Original price range: {original_price} - CF price range: {cf_price}", ax=faxs[i])
+        else:
+            raise Exception("The selected plot mode is not supported.")
+
+    fig.suptitle(plot_title)
+    fig.tight_layout()
+    
+
+def plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(12, 8)):
+    '''
+    It plots a general chart that represent the number of changed features in the 
+    computed counterfactuals or the number of changes per each feature.
+
+    Parameters:
+    -----------
+    Check the documentation of 'plot_cfs_stats'.
+    '''
+    assert isinstance(df, pd.DataFrame)
+
+    if plot_mode == "changed_feat":
+        num_changed = df.apply(lambda x: count_changed_features(x, len(feature_columns)), axis=1)
+        num_changed.value_counts().sort_index().plot.bar(rot=0, title=plot_title)
+        plt.tight_layout()
+    elif plot_mode == "feat_count":
+        features_changed = Counter(np.concatenate(df.apply(count_type_features, columns=feature_columns, axis=1).values))
+        features_changed = pd.Series(features_changed).sort_index() #if you want to normalize divide by / len(merge_df)
+        features_changed.plot.bar(title=plot_title, rot=60, figsize=figsize)
+        plt.tight_layout()
+    else:
+        raise Exception("The selected plot mode is not supported.")
+
+    plt.tight_layout()
+
+
+def plot_cfs_stats(df, feature_columns, plot_mode, plot_title, split_ranges, figsize=(12, 8)):
+    '''
+    It plots a single chart or some subplots that represent the number of changed features
+    in the computed counterfactuals or the number of changes per each feature.
 
     Parameters:
     -----------
     df: pd.DataFrame
         The dataframe that contains the data to plot.
     feature_columns: pd.Index
-        The columns that the function will use to count the features.
+        The columns that the function will consider to work on the features.
+    plot_mode: str
+        The plot can show the number of changed features for each counterfactual, passing
+        the "changed_feat" parameter, or the number of times that each feature has been 
+        changed passing "feat_count" parameter.
+    plot_title: str
+        The general title to use for the plot. The subtitles for the different subplots
+        represent the ranges of the counterfactuals.
+    split_ranges: bool
+        If True then the function will show 4 different subplots, one for each counterfactual
+        range, otherwise it will show a general plot.
+    figsize: tuple
+        The size to use for the figure plotted by the function.
     '''
-    assert isinstance(df, pd.DataFrame)
-    grouped_df = df.groupby(['misc_price_min_original', 'misc_price_min_cf'], axis=0)
-    fig, axs = plt.subplots(2, 2, figsize=(14, 14))
-    faxs = axs.ravel()
-
-    for i, (name, group) in enumerate(grouped_df):
-        original_price = (group["misc_price_min_original"].unique().item(), group["misc_price_max_original"].unique().item())
-        assert len(original_price) == 2
-        cf_price = (group["misc_price_min_cf"].unique().item(), group["misc_price_max_cf"].unique().item())
-        assert len(cf_price) == 2
-
-        features_changed = Counter(np.concatenate(group.apply(count_type_features, columns=feature_columns, axis=1).values))
-        features_changed = pd.Series(features_changed).sort_values()
-        features_changed.plot.barh(title=f"Original price range: {original_price} - CF price range: {cf_price}", ax=faxs[i])
-
-    fig.suptitle("Number of changed features per price range")
-    fig.tight_layout()
+    if split_ranges == True:
+        subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsize)
+    else:
+        plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize)
 
 
 def show_sample(df, idx):
@@ -171,13 +216,3 @@ def show_sample(df, idx):
 
     df_sample = sample[sample.notna()].sort_index().to_frame()
     return df_sample.style.apply(lambda x: ["background: blue; opacity: 0.50; color: white;" if v not in not_changed_cols else "" for v in x.index], axis=0)
-
-
-def convert_string_feat(df, feat_map):
-    for feat, val in feat_map.items():
-        df[feat] = df[feat].replace(val)
-    return df
-
-
-def compute_distance(x, y):
-    return np.linalg.norm(x - y, ord=2)
