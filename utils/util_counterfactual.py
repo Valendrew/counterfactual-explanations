@@ -14,6 +14,37 @@ from dice_ml.model import UserConfigValidationException
 # Functions for generic usage
 ################################
 
+def create_feature_props(df: pd.DataFrame, cont_feat: list, cat_feat: list, weights: np.ndarray) -> dict:
+    def compute_discrete(values: np.ndarray, bounds):
+        values = np.unique(values)
+        if isinstance(bounds, tuple):
+            return list(values[(values >= bounds[0]) & (values <= bounds[1])])
+        else:
+            raise ValueError("Bounds must be a tuple.")
+
+    feature_props = {}
+    for idx, feat in cont_feat:
+        if df[feat].unique().shape[0] < 30:
+            feature_props[feat] = {
+                "weight": weights[idx],
+                "type": "continuous",
+                "bounds": (-2, 2),
+                "discrete": compute_discrete(df[feat], (-2, 2))
+            }
+        else:
+            feature_props[feat] = {
+                "weight": weights[idx],
+                "type": "continuous",
+                "bounds": (-2, 2),
+            }
+    for idx, feat in cat_feat:
+        feature_props[feat] = {
+            "weight": weights[idx],
+            "type": "categorical",
+            "bounds": (int(df[feat].min()), int(df[feat].max()))
+        }
+    return feature_props
+
 
 def get_counterfactual_class(initial_class: int, num_classes: int, lower: bool, verbose: bool = True):
     """
@@ -206,7 +237,7 @@ def generate_counterfactuals_from_sample_list(
     feature_props: dict,
     type_cf: str,
     target_column: str,
-    save_filename: str,
+    save_filename = None,
     backend=None,
     dice_method=None,
     pipeline=None,
@@ -234,7 +265,7 @@ def generate_counterfactuals_from_sample_list(
         The new counterfactual class, if it needs to be lowered, increased or kept the same.
     target_column : str
         The target feature name of the dataset.
-    save_filename : str
+    save_filename : str, optional
         The name of the file where to save the generated counterfactuals.
     backend : str, optional
         The backend to use to initialize the Dice model, by default None
@@ -264,7 +295,7 @@ def generate_counterfactuals_from_sample_list(
     assert isinstance(feature_props, dict), "The feature_props parameter must be a dictionary."
     assert isinstance(type_cf, str), "The type_cf parameter must be a string."
     assert isinstance(target_column, str), "The target_column parameter must be a string."
-    assert isinstance(save_filename, str), "The save_filename parameter must be a string."
+    assert isinstance(save_filename, str) or save_filename is None, "The save_filename parameter must be a string or None"
     assert isinstance(backend, str) or backend is None, "The backend parameter must be a string or None."
     assert isinstance(dice_method, str) or dice_method is None, "The dice_method parameter must be a string or None."
     assert isinstance(pipeline, ColumnTransformer) or pipeline is None, "The pipeline parameter must be a ColumnTransformer or None."
@@ -321,5 +352,6 @@ def generate_counterfactuals_from_sample_list(
             # Concat the generated counterfactual with the previous ones
             cfs_generated = pd.concat([cfs_generated, sample_generated.to_frame().T], axis=0)
 
-    cfs_generated.to_csv(save_filename, index=True)
+    if save_filename is not None:
+        cfs_generated.to_csv(save_filename, index=True)
     return cfs_generated
