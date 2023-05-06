@@ -33,8 +33,7 @@ def cast_round_type(df, type_dict):
             
     return df
 
-
-def join_merge_columns(df_cf, df_original):
+def join_merge_columns(df_cf: pd.DataFrame, df_original: pd.DataFrame, label: list[str]):
     '''
     It merges the two passed dataframes using the inner join.
 
@@ -52,6 +51,9 @@ def join_merge_columns(df_cf, df_original):
         in input.
     '''
     columns = df_original.columns
+    if columns.isin(label).any() == False:
+        raise Exception(f"The label {label} is not present in the original dataframe.")
+    
     lsuffix, rsuffix = "_cf", "_original"
 
     inner_df = df_cf.join(df_original, how="inner", lsuffix=lsuffix, rsuffix=rsuffix)
@@ -59,12 +61,13 @@ def join_merge_columns(df_cf, df_original):
         left_c = c + lsuffix
         right_c = c + rsuffix
         if inner_df[left_c].dtype != inner_df[right_c].dtype:
-            raise ValueError(f"Column '{c}' has different dtypes: {inner_df[left_c].dtype} and {inner_df[right_c].dtype}")
-        equal_values = inner_df[left_c] == (inner_df[right_c])
-        assert isinstance(equal_values, pd.Series)
-
-        if equal_values.any():
-            inner_df.loc[equal_values, left_c] = np.nan 
+            raise TypeError(f"Column '{c}' has different dtypes: {inner_df[left_c].dtype} and {inner_df[right_c].dtype}")
+        
+        if c not in label:
+            equal_values = inner_df[left_c] == (inner_df[right_c])
+            assert isinstance(equal_values, pd.Series)
+            if equal_values.any():
+                inner_df.loc[equal_values, left_c] = np.nan 
     
     return inner_df
 
@@ -97,7 +100,7 @@ def count_type_features(series, columns: pd.Index):
     return columns.difference(na_columns).to_numpy()
 
 
-def convert_string_feat(df, feat_map):
+def convert_string_feat(df: pd.DataFrame, feat_map: dict):
     for feat, val in feat_map.items():
         df[feat] = df[feat].replace(val)
     return df
@@ -107,7 +110,7 @@ def compute_distance(x, y, ord=2):
     return np.linalg.norm(x - y, ord=ord)
 
 
-def subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(12, 8)):
+def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, **kwargs):
     '''
     It plots four different graphs that represent the number of changed features
     in the computed counterfactuals, split by range of price change.
@@ -121,7 +124,12 @@ def subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsiz
     feat_prices_max = ['misc_price_max_original', 'misc_price_max_cf']
 
     grouped_df = df.groupby(feat_prices_min, axis=0)
-    fig, axs = plt.subplots(2, 2, figsize=figsize)
+    n_rows, n_cols = 2, 2
+
+    if grouped_df.ngroups > n_rows * n_cols:
+        raise Exception(f"The number of groups is greater than the number of subplots: {grouped_df.ngroups} > {n_rows * n_cols}")
+    
+    fig, axs = plt.subplots(n_rows, n_cols, **kwargs)
     faxs = axs.ravel()
 
     for i, (_, group) in enumerate(grouped_df):
@@ -140,11 +148,13 @@ def subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsiz
         else:
             raise Exception("The selected plot mode is not supported.")
 
+    for i in range(1, n_rows * n_cols - grouped_df.ngroups + 1):
+        faxs[-i].axis("off")
     fig.suptitle(plot_title)
     fig.tight_layout()
     
 
-def plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(12, 8)):
+def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, **kwargs):
     '''
     It plots a general chart that represent the number of changed features in the 
     computed counterfactuals or the number of changes per each feature.
@@ -162,7 +172,7 @@ def plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(1
     elif plot_mode == "feat_count":
         features_changed = Counter(np.concatenate(df.apply(count_type_features, columns=feature_columns, axis=1).values))
         features_changed = pd.Series(features_changed).sort_index() #if you want to normalize divide by / len(merge_df)
-        features_changed.plot.bar(title=plot_title, rot=60, figsize=figsize)
+        features_changed.plot.bar(title=plot_title, rot=60, **kwargs)
         plt.tight_layout()
     else:
         raise Exception("The selected plot mode is not supported.")
@@ -170,7 +180,7 @@ def plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize=(1
     plt.tight_layout()
 
 
-def plot_cfs_stats(df, feature_columns, plot_mode, plot_title, split_ranges, figsize=(12, 8)):
+def plot_cfs_stats(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, split_ranges: bool, **kwargs):
     '''
     It plots a single chart or some subplots that represent the number of changed features
     in the computed counterfactuals or the number of changes per each feature.
@@ -195,9 +205,9 @@ def plot_cfs_stats(df, feature_columns, plot_mode, plot_title, split_ranges, fig
         The size to use for the figure plotted by the function.
     '''
     if split_ranges == True:
-        subplots_changed_features(df, feature_columns, plot_mode, plot_title, figsize)
+        subplots_changed_features(df, feature_columns, plot_mode, plot_title, **kwargs)
     else:
-        plot_changed_features(df, feature_columns, plot_mode, plot_title, figsize)
+        plot_changed_features(df, feature_columns, plot_mode, plot_title, **kwargs)
 
 
 def show_sample(df, idx):
