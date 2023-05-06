@@ -14,7 +14,31 @@ from dice_ml.model import UserConfigValidationException
 # Functions for generic usage
 ################################
 
-def create_feature_props(df: pd.DataFrame, cont_feat: list, cat_feat: list, weights: np.ndarray) -> dict:
+def create_feature_props(df: pd.DataFrame, cont_feat: list, cat_feat: list, weights: np.ndarray,
+                         to_fix: list[str]=[]) -> dict:
+    '''
+    It creates a dictionary that contains, for each feature, different information, such as
+    the weight to give to the feature, the type of the column, the bounds and if it can be
+    changed during the generation of counterfactuals. 
+
+    Parameters:
+    -----------
+    df: pd.DataFrame
+        The dataframe to consider to compute the statistics.
+    cont_feat: list[tuple[int, str]]
+        The list of names of continuous features.
+    cat_feat: list[tuple[int, str]]
+        The list of names of categorical features.
+    weights: np.ndarray
+        The array with the weights to give to each feature.
+    to_fix: list[str]
+        The list of features that cannot be changed during the search.
+
+    Returns:
+    --------
+        dict
+            The dictionary with all the information about the features. 
+    '''
     def compute_discrete(values: np.ndarray, bounds):
         values = np.unique(values)
         if isinstance(bounds, tuple):
@@ -29,19 +53,22 @@ def create_feature_props(df: pd.DataFrame, cont_feat: list, cat_feat: list, weig
                 "weight": weights[idx],
                 "type": "continuous",
                 "bounds": (-2, 2),
-                "discrete": compute_discrete(df[feat], (-2, 2))
+                "discrete": compute_discrete(df[feat], (-2, 2)),
+                "fixed": True if feat in to_fix else False
             }
         else:
             feature_props[feat] = {
                 "weight": weights[idx],
                 "type": "continuous",
                 "bounds": (-2, 2),
+                "fixed": True if feat in to_fix else False
             }
     for idx, feat in cat_feat:
         feature_props[feat] = {
             "weight": weights[idx],
             "type": "categorical",
-            "bounds": (int(df[feat].min()), int(df[feat].max()))
+            "bounds": (int(df[feat].min()), int(df[feat].max())),
+            "fixed": True if feat in to_fix else False
         }
     return feature_props
 
