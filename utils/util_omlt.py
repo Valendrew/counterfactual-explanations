@@ -286,8 +286,11 @@ def initialize_sample_distance(
             return pyo.NonNegativeIntegers
         else:
             return pyo.NonNegativeReals
+        
+    def absolute_distance_bounds(m, i):
+        return (0, m.feature_ranges[i])
 
-    pyo_model.absolute_distance = pyo.Var(pyo_model.features_set, within=absolute_distance_within, initialize=0)
+    pyo_model.absolute_distance = pyo.Var(pyo_model.features_set, within=absolute_distance_within, initialize=0, bounds=absolute_distance_bounds)
 
     # i - s <= d
     def absolute_distance_constr_1_rule(m, i):
@@ -651,7 +654,7 @@ class OmltCounterfactual(BaseCounterfactual):
 
         # Set the domain and bounds for each feature of the counterfactual
         # TODO evaluate whether to remove
-        features_constraints(self.pyo_model, self.feature_props)
+        # features_constraints(self.pyo_model, self.feature_props)
 
         # Set the discrete values for some numerical features
         features_discrete_values(
@@ -804,7 +807,7 @@ class OmltCounterfactual(BaseCounterfactual):
         )
 
         # Set the solver to mindtpy
-        solver_factory = pyo.SolverFactory(solver)
+        solver_factory = pyo.SolverFactory("gdpopt.loa")
 
         # Set the solver options and solve the problem
         start_time = time.time()
@@ -812,10 +815,10 @@ class OmltCounterfactual(BaseCounterfactual):
             try:
                 pyo_solution = solver_factory.solve(
                     self.pyo_model,
-                    tee=verbose,
-                    time_limit=solver_options["timelimit"],
+                    tee=True,
                     mip_solver=self.AVAILABLE_SOLVERS["mip"],
                     nlp_solver=self.AVAILABLE_SOLVERS["nlp"],
+                    **solver_options
                 )
             except ValueError as e:
                 raise ValueError(e)
