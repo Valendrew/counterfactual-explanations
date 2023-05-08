@@ -114,7 +114,7 @@ class DiceCounterfactual(BaseCounterfactual):
         self.start_samples = sample.copy()
 
         feature_weights = {feat: info['weight'] for feat, info in self.feature_props.items()}
-        # features_to_vary = [feat for feat, info in self.feature_props.items() if info['fixed']]
+        features_to_vary = [feat for feat, info in self.feature_props.items() if not info['fixed']]
         # If all the weights are equal
         if len(set(feature_weights.values())) == 1:
             feature_weights="inverse_mad"
