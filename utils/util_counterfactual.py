@@ -1,4 +1,5 @@
 from typing import Union
+import time
 
 import numpy as np
 import pandas as pd
@@ -10,9 +11,34 @@ from utils.util_omlt import OmltCounterfactual
 
 from dice_ml.model import UserConfigValidationException
 
+import torch
+
 ################################
 # Functions for generic usage
 ################################
+def difference_log_softmax(model, X: pd.DataFrame, y: pd.Series, device=torch.device("cpu")):
+    X_vals = X.values
+    y_vals = y.values
+    model.eval()
+    with torch.no_grad():
+        correct_diff = []
+        wrong_diff = []
+        for i in range(X_vals.shape[0]):
+            X_i = torch.tensor(X_vals[i], dtype=torch.float).view(1, -1).to(device)
+            y_i = round(y_vals[i])
+
+            output = model(X_i)
+            y_prob = torch.softmax(output, dim=1)
+            y_pred = torch.argmax(y_prob, dim=1).item()
+
+            marginal_softmax = torch.log(torch.sum(torch.exp(output))) - output.squeeze()[y_i].item()
+
+            if y_pred == y_i:
+                correct_diff.append(marginal_softmax)
+            else:
+                wrong_diff.append(marginal_softmax)
+
+    return np.array(correct_diff), np.array(wrong_diff)
 
 def create_feature_props(df: pd.DataFrame, cont_feat: list, cat_feat: list, weights: np.ndarray,
                          to_fix: list[str]=[]) -> dict:
@@ -98,12 +124,12 @@ def get_counterfactual_class(initial_class: int, num_classes: int, lower: bool, 
         return initial_class - counterfactual_op
     return initial_class + counterfactual_op
 
-def generate_counterfactual(sample: pd.Series, sample_label: int, target_column: str, type_cf: str, cf_model, pipeline, **kwargs_cf):
+def generate_counterfactual(sample: pd.DataFrame, sample_label: int, target_column: str, type_cf: str, cf_model, pipeline, **kwargs_cf):
     """Generates a counterfactual for the given sample.
 
     Parameters
     ----------
-    sample : pd.Series
+    sample : pd.DataFrame
         The sample for which we want to generate the counterfactual.
     sample_label : int
         The label of the sample.
@@ -147,6 +173,12 @@ def generate_counterfactual(sample: pd.Series, sample_label: int, target_column:
     else:
         raise ValueError(f"Counterfactual type '{type_cf}' not recognized as valid. Please use 'lower', 'increase' or 'same'.")
     
+    # compute upper bound of softmax for omlt
+    if kwargs_cf.get("min_probability", None) is not None:
+        corr_vals, wrong_vals = difference_log_softmax(cf_model.model, sample.drop(target_column, axis=1), pd.Series([type_cf_value]))
+        if len(wrong_vals) != 1:
+            raise ValueError("The number of wrong values must be 1.")
+        kwargs_cf["upper_bound_softmax"] = wrong_vals[0]
     # Generate the counterfactuals
     try:
         cf = cf_model.generate_counterfactuals(sample, int(type_cf_value), **kwargs_cf)
@@ -347,6 +379,7 @@ def generate_counterfactuals_from_sample_list(
         raise ValueError(f"Counterfactual class '{class_cf}' not recognized. Please use 'omlt' or 'dice'.")
     
     cfs_generated = pd.DataFrame()
+    times = []
     # Iterate over the samples and generate the counterfactuals
     for idx, i in enumerate(sample_list.index):
         print(f"[{idx}] Generating counterfactual for sample {i}.")
@@ -355,6 +388,7 @@ def generate_counterfactuals_from_sample_list(
             print(f"The index '{i}' of the sample list is not present in the label list.")
             continue
         
+        start_time = time.time()
         try:
             cfs = generate_counterfactual(
                 sample_list.loc[[i]],
@@ -371,6 +405,9 @@ def generate_counterfactuals_from_sample_list(
         except UserConfigValidationException as e:
             print(e)
             continue
+        finally:
+            times.append(time.time() - start_time)
+            print(f"Time elapsed: {times[-1]} seconds.")
 
         if cfs is not None and len(cfs) > 0:
             sample_generated: pd.Series = cfs[0]["Counterfactual_0"].rename(i)
@@ -381,4 +418,5 @@ def generate_counterfactuals_from_sample_list(
 
     if save_filename is not None:
         cfs_generated.to_csv(save_filename, index=True)
+        pd.DataFrame(times, index=sample_list.index, columns=["time"]).to_csv(f"{save_filename}_times.csv", index=True)
     return cfs_generated

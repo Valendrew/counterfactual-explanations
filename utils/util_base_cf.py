@@ -66,7 +66,7 @@ class BaseCounterfactual:
         self.feature_props = dict(sorted(feature_props.items(), key=lambda x: columns.get_loc(x[0])))
         self.start_samples = None
         self.CFs = None
-        self.SUPPORTED_PROPERTIES = ["type", "weight", "bounds", "discrete"]
+        self.SUPPORTED_PROPERTIES = ["type", "weight", "bounds", "discrete", "fixed"]
 
     def get_property_values(self, feature: str, default_value=None) -> list:
         """Get the values of the given feature from the feature_props dict.

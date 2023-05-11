@@ -171,7 +171,7 @@ def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode
         plt.tight_layout()
     elif plot_mode == "feat_count":
         features_changed = Counter(np.concatenate(df.apply(count_type_features, columns=feature_columns, axis=1).values))
-        features_changed = pd.Series(features_changed).sort_index() #if you want to normalize divide by / len(merge_df)
+        features_changed = pd.Series(features_changed).sort_values(ascending=False) #if you want to normalize divide by / len(merge_df)
         features_changed.plot.bar(title=plot_title, rot=60, **kwargs)
         plt.tight_layout()
     else:

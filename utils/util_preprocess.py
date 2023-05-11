@@ -510,13 +510,14 @@ class GSMArenaPreprocess:
         return df
 
 
-def extract_prices_rate(curr, ser):
+def extract_prices_rate(curr: str, ser: pd.Series):
     # pattern to extract the price
     num_pat = r"[\d]{2,6}(?:\.[\d]{1,2})?"
-    pattern = f"EUR\s?(?P<eur>{num_pat}).*?{curr}\s?(?P<{curr.lower()}>{num_pat})"
+    # pattern = f"EUR\s?(?P<eur>{num_pat}).*?{curr}\s?(?P<{curr.lower()}>{num_pat})"
+    pattern = f"{curr}\s?(?P<{curr.lower()}>{num_pat}).*?EUR\s?(?P<eur>{num_pat})"
 
     # filter the rows that contain the currency of interest
-    prices = ser[ser.str.contains(f"EUR.*?{curr}|{curr}.*?EUR", regex=True, na=False)]
+    prices: pd.Series = ser[ser.str.contains(f"EUR.*?{curr}|{curr}.*?EUR", regex=True, na=False)]
 
     # extract the price values of both currencies and drop the rows with NaN values
     prices_ext = (
@@ -524,7 +525,7 @@ def extract_prices_rate(curr, ser):
     )
     prices_ext = prices_ext.sort_values("eur")
 
-    conversion_rate = prices_ext.apply(lambda x: x[1] / x[0], axis=1)
+    conversion_rate = prices_ext.apply(lambda x: x["eur"] / x[curr.lower()], axis=1)
     conversion_rate = conversion_rate.rename("conversion_rate")
 
     print(f"Number of prices: {len(prices_ext)}")
