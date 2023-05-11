@@ -4,6 +4,9 @@
 ### Python ###
 __pycache__/
 
+### Jupyter notebooks ###
+.ipynb_checkpoints/
+
 ### Kaggle ###
 kaggle.json
 
