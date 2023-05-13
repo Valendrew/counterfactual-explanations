@@ -374,7 +374,7 @@ def try_scaler(
     pipeline_scalers = list()
     # Add the round scaler if needed
     if round:
-        round_scaler = FunctionTransformer(np.round, validate=False)
+        round_scaler = FunctionTransformer(np.ceil, validate=False)
         pipeline_scalers.append(("round", round_scaler))
     
     # Add the log scaler if needed
@@ -419,13 +419,12 @@ def compare_scalers(name_feat: str, df: pd.DataFrame, original_df: pd.DataFrame,
     # Convert original data
     unique_original = transform_cont_feature(name_feat, original_df, original_pipeline)
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axs = plt.subplots(1, 2, figsize=(7, 3))
     faxs = axs.ravel()
 
     df_scalers_dict = {
         "Robust Scaler": df_ret_robust,
         "Standard Scaler": df_ret_standard,
-        "Original Data": original_df
     }
 
     for i, (name_scaler, df_scaler) in enumerate(df_scalers_dict.items()):
