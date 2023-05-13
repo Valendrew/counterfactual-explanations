@@ -121,7 +121,7 @@ class DataTransformer:
                 if c != "EUR":
                     series_raw.loc[idx] = (
                         series_raw.loc[idx]
-                        .apply(lambda x: float(x) / conversion_rates[c])
+                        .apply(lambda x: float(x) * conversion_rates[c])
                         .astype(str)
                     )
 
@@ -510,11 +510,13 @@ class GSMArenaPreprocess:
         return df
 
 
-def extract_prices_rate(curr: str, ser: pd.Series):
+def extract_prices_rate(curr: str, ser: pd.Series, first_eur=True):
     # pattern to extract the price
     num_pat = r"[\d]{2,6}(?:\.[\d]{1,2})?"
-    # pattern = f"EUR\s?(?P<eur>{num_pat}).*?{curr}\s?(?P<{curr.lower()}>{num_pat})"
-    pattern = f"{curr}\s?(?P<{curr.lower()}>{num_pat}).*?EUR\s?(?P<eur>{num_pat})"
+    if first_eur:
+        pattern = f"EUR\s?(?P<eur>{num_pat}).*?{curr}\s?(?P<{curr.lower()}>{num_pat})"
+    else:
+        pattern = f"{curr}\s?(?P<{curr.lower()}>{num_pat}).*?EUR\s?(?P<eur>{num_pat})"
 
     # filter the rows that contain the currency of interest
     prices: pd.Series = ser[ser.str.contains(f"EUR.*?{curr}|{curr}.*?EUR", regex=True, na=False)]

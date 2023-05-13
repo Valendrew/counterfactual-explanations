@@ -201,9 +201,9 @@
         }
     },
     "conversion_rates": {
-        "USD": 0.92,
-        "INR": 90.36154021,
-        "GBP": 0.87
+        "USD": 1.060668,
+        "INR": 0.0114,
+        "GBP": 1.0458
     },
     "fill_cols": {
         "display_type": "no",

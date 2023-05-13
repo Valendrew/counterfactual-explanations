@@ -10,7 +10,7 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import HuberRegressor, LinearRegression
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, balanced_accuracy_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, balanced_accuracy_score, median_absolute_error
 
 from typing import Callable
 import math
@@ -450,14 +450,10 @@ class FixedLinearRegressor(LinearRegression):
         self.trainable = False
 
 
-def compare_models(X, y, models, model_names, rng):
+def compare_models(X_train, y_train, X_test, y_test, models, model_names):
     # split the data into training and test sets
-    if X.shape[0] > 30:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=rng
-        )
-    else:
-        X_test, y_test = X, y
+    if X_train.shape[0] < 30:
+        return ValueError("The number of rows in the dataset is too low to split it into training and test sets.")
 
     y_preds = []
     for model, name in zip(models, model_names):
@@ -476,13 +472,14 @@ def compare_models(X, y, models, model_names, rng):
         # compute the errors
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
+        # mae = median_absolute_error(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         print(f"{name} coefficients: {model.coef_}")
         print(f"{name} RMSE: {math.sqrt(mse):.2f}")
         print(f"{name} r2-score: {r2:.2f}")
         print(f"{name} MAE: {mae:.2f}", end="\n\n")
 
-    return X_test, y_test, y_preds
+    return y_preds
 
 
 def evaluate_sample(model, sample_idx: Union[pd.DataFrame, pd.Series], y_idx: int, verbose=True, device=torch.device("cpu")) -> int:
