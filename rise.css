@@ -5,3 +5,23 @@ div.reveal {
 div.fragment {
 	font-size: 14px;
 }
+
+div.reveal h3, h2 {
+    margin-top: 0 !important;
+}
+
+.CodeMirror-code .CodeMirror-line:last-of-type {
+    margin-bottom: 10px;
+}
+
+#notebook {
+    background-image: linear-gradient(180deg, azure, white);
+}
+
+.code_cell {
+    background-color: white;
+}
+
+.reveal p {
+    margin: 10px 0px;
+}
