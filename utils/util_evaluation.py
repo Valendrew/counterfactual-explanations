@@ -167,13 +167,11 @@ def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode
 
     if plot_mode == "changed_feat":
         num_changed = df.apply(lambda x: count_changed_features(x, len(feature_columns)), axis=1)
-        num_changed.value_counts().sort_index().plot.bar(rot=0, title=plot_title)
-        plt.tight_layout()
+        num_changed.value_counts().sort_index().plot.bar(rot=0, title=plot_title, **kwargs)
     elif plot_mode == "feat_count":
         features_changed = Counter(np.concatenate(df.apply(count_type_features, columns=feature_columns, axis=1).values))
         features_changed = pd.Series(features_changed).sort_values(ascending=False) #if you want to normalize divide by / len(merge_df)
         features_changed.plot.bar(title=plot_title, rot=60, **kwargs)
-        plt.tight_layout()
     else:
         raise Exception("The selected plot mode is not supported.")
 
@@ -201,8 +199,8 @@ def plot_cfs_stats(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, 
     split_ranges: bool
         If True then the function will show 4 different subplots, one for each counterfactual
         range, otherwise it will show a general plot.
-    figsize: tuple
-        The size to use for the figure plotted by the function.
+    **kwargs: tuple
+        The arguments to give as input to a matplotlib plot function.
     '''
     if split_ranges == True:
         subplots_changed_features(df, feature_columns, plot_mode, plot_title, **kwargs)
