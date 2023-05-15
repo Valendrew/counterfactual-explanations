@@ -82,6 +82,7 @@ def features_constraints(pyo_model, feature_props: dict):
         # Set the bounds
 
 
+
 def features_discrete_values(pyo_model, feature_discrete: list[list]):
     """Generate the constraints for the discrete features.
 
@@ -344,9 +345,9 @@ def gower_distance(pyo_model, sample: np.ndarray, feat_weights: list[float]):
     assert isinstance(pyo_model, pyo.ConcreteModel), "pyo_model must be a pyomo model"
     assert isinstance(sample, np.ndarray), "x must be a numpy array"
     assert isinstance(feat_weights, list), "feat_weights must be a list"
-    assert sum(feat_weights) <= len(
-        feat_weights
-    ), "feat_weights must sum to the length of the features"
+    # assert sum(feat_weights) <= len(
+    #     feat_weights
+    # ), "feat_weights must sum to the length of the features"
 
     # # Feature variables and constraints
     pyo_model.gower_distance = pyo.Var(
@@ -443,6 +444,7 @@ def limit_counterfactual(pyo_model, sample: np.ndarray, feat_fixed: list):
 
     for i, val in enumerate(feat_fixed):
         if val:
+            pyo_model.nn.scaled_inputs[i].bounds = (sample[i], sample[i])
             pyo_model.nn.scaled_inputs[i].fix(sample[i])
             pyo_model.nn.scaled_inputs[i].fix(sample[i])
 
@@ -861,7 +863,7 @@ class OmltCounterfactual(BaseCounterfactual):
             if abs(counterfactual_sample[i] - sample[i]) < 1e-3:
                 counterfactual_sample[i] = sample[i]
 
-        dummy_sample = np.zeros(len(self.X.columns))
+        dummy_sample = np.where(self.get_property_values("fixed", False), sample[:-1], np.zeros(len(self.X.columns)))
         if np.linalg.norm(np.array(counterfactual_sample) - dummy_sample, ord=1) < 1e-3:
             raise ValueError("The counterfactual is the same as a sample of zeros.")
 
