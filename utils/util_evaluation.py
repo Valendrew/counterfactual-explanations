@@ -25,7 +25,7 @@ def cast_round_type(df, type_dict):
     '''
     for feat, val in type_dict.items():
         if val == float:
-            df[feat] = df[feat].astype(val).round(2)
+            df[feat] = df[feat].astype(val).round(4)
         elif val == int:
             df[feat] = df[feat].astype(float).round(0).astype(int)
         else:
