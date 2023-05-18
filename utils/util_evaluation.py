@@ -4,6 +4,13 @@ import matplotlib.pyplot as plt
 
 from collections import Counter
 
+def get_failed_index(df: pd.DataFrame, corr_ind: pd.Index, m_idx: pd.Index, labels: list):
+    low_df = df[(df["misc_price_min"] == labels[0])].index
+    high_df = df[(df["misc_price_min"] == labels[2])].index
+    failed_low = m_idx.difference(low_df)
+    failed_high = m_idx.difference(high_df)
+    failed_other = corr_ind.difference(df.index)
+    return failed_low.union(failed_high).union(failed_other)
 
 def cast_round_type(df, type_dict):
     '''
