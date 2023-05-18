@@ -7,7 +7,9 @@ import pandas as pd
 import torch
 
 # pyomo for optimization
+import pyomo.core.expr.calculus.derivatives as pyo_derivatives
 import pyomo.environ as pyo
+from pyomo.repn.standard_repn import generate_standard_repn
 
 # omlt for interfacing our neural network with pyomo
 from omlt import OmltBlock
@@ -177,7 +179,8 @@ def compute_obj_1_marginal_softmax(
     pyo_model.obj1_z_upper_bound_relu = pyo.Constraint()
     pyo_model.obj1_z_upper_bound_zhat_relu = pyo.Constraint()
 
-    l, u = (-min_probability - 1e-2, 5)
+    # l, u = (-min_probability - 1e-2, 5)
+    l, u = min_probability - 1, min_probability
 
     # set dummy parameters here to avoid warning message from Pyomo
     pyo_model.obj1_big_m_lb_relu = pyo.Param(default=-l, mutable=False)
@@ -195,20 +198,39 @@ def compute_obj_1_marginal_softmax(
     )
 
     # Constraints the marginal softmax
-    def softmax_constr_rule(m):
-        return (
-            m.obj1_marginal_softmax
-            == pyo.log(sum([pyo.exp(m.nn.scaled_outputs[i]) for i in range(num_classes)]))
-            - m.nn.scaled_outputs[cf_class]
+    # def softmax_constr_rule(m):
+    #     return (
+    #         m.obj1_marginal_softmax
+    #         == pyo.log(sum([pyo.exp(m.nn.scaled_outputs[i]) for i in range(num_classes)]))
+    #         - m.nn.scaled_outputs[cf_class]
+    #     )
+
+    # pyo_model.obj1_marginal_softmax_constr = pyo.Constraint(
+    #     rule=softmax_constr_rule(pyo_model)
+    # )
+    def taylor_softmax_constr_rule(m):
+        cf_val = 1 + m.nn.scaled_outputs[cf_class] + 0.5 * m.nn.scaled_outputs[cf_class] ** 2
+        other_vals = sum(
+            [
+                1 + m.nn.scaled_outputs[i] + 0.5 * m.nn.scaled_outputs[i] ** 2
+                for i in range(num_classes)
+                if i != cf_class
+            ]
         )
+        return m.obj1_marginal_softmax == cf_val / (cf_val + other_vals)
 
     pyo_model.obj1_marginal_softmax_constr = pyo.Constraint(
-        rule=softmax_constr_rule(pyo_model)
+        rule=taylor_softmax_constr_rule(pyo_model)
     )
     # constrains the difference of the probabilities
+    # pyo_model.obj1_diff_prob_constr = pyo.Constraint(
+    #     expr=pyo_model.obj1_diff_prob
+    #     == pyo_model.obj1_marginal_softmax - min_probability
+    # )
+
     pyo_model.obj1_diff_prob_constr = pyo.Constraint(
         expr=pyo_model.obj1_diff_prob
-        == pyo_model.obj1_marginal_softmax - min_probability
+        == min_probability - pyo_model.obj1_marginal_softmax
     )
 
     pyo_model.obj1_z_lower_bound_relu = pyo_model.obj1_max_val >= 0
@@ -223,7 +245,6 @@ def compute_obj_1_marginal_softmax(
         <= pyo_model.obj1_diff_prob
         - pyo_model.obj1_big_m_lb_relu * (1.0 - pyo_model.obj1_q_relu)
     )
-
     return pyo_model.obj1_max_val
 
 
@@ -660,7 +681,7 @@ class OmltCounterfactual(BaseCounterfactual):
             raise ValueError("Objective 1 must be computed.")
         else:
             # obj_1 = compute_obj_1_marginal_softmax(
-            #     self.pyo_model, cf_class, self.num_classes, min_probability, upper_bound_softmax
+                # self.pyo_model, cf_class, self.num_classes, min_probability, upper_bound_softmax
             # )
             constraints_change_label(self.pyo_model, cf_class, self.num_classes)
             obj_1 = 0
