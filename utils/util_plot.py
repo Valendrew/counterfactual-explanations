@@ -99,3 +99,33 @@ def plot_series_distribution(series, title, boxplot=False):
 
     fig.suptitle("Distribution of conversion rates")
     fig.tight_layout()
+
+def plot_relative_changes(mean_changed: pd.Series, axs, title: str, remove_right):
+    mean_changed.plot.barh(ax=axs, title=title, rot=0)
+    # set title fontsize
+    axs.title.set_fontsize(12)
+
+    # negative values in red
+    neg_idx = mean_changed[mean_changed <= 0].index
+    for i in neg_idx:
+        idx = mean_changed.index.get_loc(i)
+        axs.get_children()[idx].set_color("r")
+
+    # add vertical line at 0
+    axs.axvline(x=0,linewidth= 1, color='k')
+
+    # remove axis
+    if remove_right:
+        axs.spines['right'].set_visible(False)
+    for s in ['top', 'bottom', 'left']:
+        axs.spines[s].set_visible(False)
+
+    # remove values on x-axis
+    axs.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+    # remove values on y-axis
+    axs.tick_params(axis='y', which='both', right=False, left=False, labelleft=True)
+
+    # add values directly on bars
+    for i, v in enumerate(mean_changed):
+        x_pos = 0.5 if v < 0 else v + 0.5
+        axs.text(x_pos, i - 0.1, f"{v:.1f}%", color='black', fontweight='bold', fontsize=10)

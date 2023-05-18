@@ -4,6 +4,38 @@ import matplotlib.pyplot as plt
 
 from collections import Counter
 
+from utils import util_plot
+
+
+def relative_feature_changes(sample: pd.Series, ignore_cols: list, subfix: list, sep="_"):
+    def get_columsn_with_subfix(columns: pd.Index, remove_subfix):
+        if remove_subfix:
+            columns = columns.str.rsplit(sep, n=1).str[0]
+        return [f"{col}{sep}{sub}" for sub in subfix for col in columns]
+
+    if len(subfix) < 2:
+        raise ValueError("The subfix list must contain at least two elements")
+    
+    ignore_cols = get_columsn_with_subfix(ignore_cols, False)
+    # check columns are in sample
+    assert all([col in sample.index for col in ignore_cols])
+
+    # feature columns (have subfixes)
+    features_cols = sample.index.drop(ignore_cols)
+    features_cols = features_cols.str.rsplit(sep, n=1).str[0].unique()
+
+    difference_values = {}
+    for c in features_cols:
+        # first element of subfix is the relative name
+        if sample[f"{c}{sep}{subfix[1]}"] == np.nan:
+            difference_values[c] = np.nan
+        else:
+            relative_dff = (sample[f"{c}{sep}{subfix[1]}"] - sample[f"{c}{sep}{subfix[0]}"]) / sample[f"{c}{sep}{subfix[0]}"]
+            difference_values[c] = relative_dff
+    
+    return pd.Series(difference_values)
+
+
 def get_failed_index(df: pd.DataFrame, corr_ind: pd.Index, m_idx: pd.Index, labels: list):
     low_df = df[(df["misc_price_min"] == labels[0])].index
     high_df = df[(df["misc_price_min"] == labels[2])].index
@@ -117,7 +149,7 @@ def compute_distance(x, y, ord=2):
     return np.linalg.norm(x - y, ord=ord)
 
 
-def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, **kwargs):
+def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, ignore_cols=None, **kwargs):
     '''
     It plots four different graphs that represent the number of changed features
     in the computed counterfactuals, split by range of price change.
@@ -152,6 +184,10 @@ def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_
             features_changed = Counter(np.concatenate(group.apply(count_type_features, columns=feature_columns, axis=1).values))
             features_changed = pd.Series(features_changed).sort_values()
             features_changed.plot.barh(title=f"Original price range: {original_price} - CF price range: {cf_price}", ax=faxs[i])
+        elif plot_mode == "relative_change":
+            vals_changed_dice_corr = group.apply(relative_feature_changes, axis=1, ignore_cols=ignore_cols, subfix=["original", "cf"])
+            mean_changed_dice = vals_changed_dice_corr.mean(axis=0) * 100
+            util_plot.plot_relative_changes(mean_changed_dice, faxs[i], f"Original price: {original_price} - CF price: {cf_price}", remove_right=i % 2)
         else:
             raise Exception("The selected plot mode is not supported.")
 
@@ -161,7 +197,7 @@ def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_
     fig.tight_layout()
     
 
-def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, **kwargs):
+def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, ignore_cols, **kwargs):
     '''
     It plots a general chart that represent the number of changed features in the 
     computed counterfactuals or the number of changes per each feature.
@@ -179,6 +215,10 @@ def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode
         features_changed = Counter(np.concatenate(df.apply(count_type_features, columns=feature_columns, axis=1).values))
         features_changed = pd.Series(features_changed).sort_values(ascending=False) #if you want to normalize divide by / len(merge_df)
         features_changed.plot.bar(title=plot_title, rot=60, **kwargs)
+    elif plot_mode == "relative_change":
+        vals_changed_dice_corr = df.apply(relative_feature_changes, axis=1, ignore_cols=ignore_cols, subfix=["original", "cf"])
+        mean_changed_dice = vals_changed_dice_corr.mean(axis=0) * 100
+        util_plot.plot_relative_changes(mean_changed_dice, plt.gca(), plot_title, remove_right=True)
     else:
         raise Exception("The selected plot mode is not supported.")
 
@@ -231,3 +271,36 @@ def show_sample(df, idx):
 
     df_sample = sample[sample.notna()].sort_index().to_frame()
     return df_sample.style.apply(lambda x: ["background: blue; opacity: 0.50; color: white;" if v not in not_changed_cols else "" for v in x.index], axis=0)
+
+def compute_most_similar_value(cf_sample: pd.Series, label: str, search_df: pd.DataFrame, same_label=False):
+    '''
+    A function that computes the most similar sample to the one with
+    index idx present in cfs.
+    '''
+    X = cf_sample.drop(label)
+    y = cf_sample[label]
+
+    search_X = search_df.drop(label, axis=1)
+    search_y = search_df[label]
+
+    if same_label == True:
+        search_index = search_y[search_y == y].index.difference([cf_sample.name])
+    else:
+        search_index = search_y.index.difference([cf_sample.name])
+
+    if not isinstance(search_index, pd.Index):
+        raise TypeError
+
+    diff_df = (search_X.loc[search_index] - X).abs().mean(axis=1)
+    # diff_df = search_X.loc[search_index].apply(lambda x: np.mean(np.abs(x - X)), axis=1)
+    if not isinstance(diff_df, pd.Series):
+        raise TypeError(f"norm_df is a {type(diff_df)} instead of a pd.Series")
+    
+    most_sim_idx = diff_df.idxmin()
+    
+    if diff_df.loc[most_sim_idx] > 0.1:
+        print(f"WARNING: the most similar sample for the cf {cf_sample.name} has a difference greater than the threshold. The difference is {diff_df.loc[most_sim_idx]:.2f} for sample {most_sim_idx}")
+        return
+            
+    # return search_df.loc[most_sim_idx]
+    return most_sim_idx
