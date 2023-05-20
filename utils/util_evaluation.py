@@ -197,7 +197,7 @@ def subplots_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_
     fig.tight_layout()
     
 
-def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, ignore_cols, **kwargs):
+def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode: str, plot_title: str, ignore_cols=None, **kwargs):
     '''
     It plots a general chart that represent the number of changed features in the 
     computed counterfactuals or the number of changes per each feature.
@@ -218,7 +218,13 @@ def plot_changed_features(df: pd.DataFrame, feature_columns: pd.Index, plot_mode
     elif plot_mode == "relative_change":
         vals_changed_dice_corr = df.apply(relative_feature_changes, axis=1, ignore_cols=ignore_cols, subfix=["original", "cf"])
         mean_changed_dice = vals_changed_dice_corr.mean(axis=0) * 100
-        util_plot.plot_relative_changes(mean_changed_dice, plt.gca(), plot_title, remove_right=True)
+        
+        if 'figsize' in kwargs:
+            fig_ax = plt.figure(figsize=kwargs['figsize']).gca()
+        else:
+            fig_ax = plt.gca()
+            
+        util_plot.plot_relative_changes(mean_changed_dice, fig_ax, plot_title, remove_right=True)
     else:
         raise Exception("The selected plot mode is not supported.")
 
