@@ -7,7 +7,7 @@ div.fragment {
 }
 
 div.reveal h3, h2 {
-    margin-top: 0 !important;
+    margin-top: 0 !important; 
 }
 
 .CodeMirror-code .CodeMirror-line:last-of-type {
@@ -15,7 +15,7 @@ div.reveal h3, h2 {
 }
 
 #notebook {
-    background-image: linear-gradient(180deg, azure, white);
+    background-image: linear-gradient(180deg, rgb(210, 246, 246), white);
 }
 
 .code_cell {
