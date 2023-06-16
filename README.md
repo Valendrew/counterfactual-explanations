@@ -8,7 +8,7 @@ In interpretable machine learning, counterfactual explanations can be used to ex
 
 <div align="center">
     <img src=https://www.microsoft.com/en-us/research/uploads/prod/2020/01/MSR-Amit_1400x788-v3-1blog.gif width="65%" />
-    <p style="font-size:0.9rem" align="center">
+    <p style="font-size:0.8rem" align="center">
         <em>Image taken from the Microsoft <a href="https://www.microsoft.com/en-us/research/blog/open-source-library-provides-explanation-for-machine-learning-through-diverse-counterfactuals/"> blog </a> about DiCE </em>
     </p>
 </div>
@@ -16,6 +16,8 @@ In interpretable machine learning, counterfactual explanations can be used to ex
 First of all we needed to train a machine learning model to make it guess if a given device belongs to the low, medium or high price range. After that the model is trained we can use it to generate counterfactual explanations of the desired class, in our case we considered only changes of labels of 1 (i.e. from low to medium price range, from medium to low price range, ...). In the case of samples that were misclassified by our model, we generated a counterfactual to change the wrong label in the actual one, such that we can observe which features the optimization model would change to correct the model classification.
 
 ***Notice***: you can run all the notebooks using jupyter notebook and showing them as a slideshow, after having installed the requirements, everything should work as expected.
+
+You can also find an implementation of a GUI interface that uses our model based on DiCE to generate counterfactuals for some devices. You can find the repository with the code and the instructions to launch the demo at [this link](https://github.com/Valendrew/counterfactual-demo).
 
 ## Dataset
 <div align="center">
